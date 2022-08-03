@@ -4,3 +4,17 @@
 *.ptx
 *.cubin
 *.fatbin
+
+# Compiled Object files
+*.o
+
+# Executables
+zpic-cuda
+
+# Output directories
+CHARGE/
+EMF/
+PARTICLES/
+
+# Python leftovers
+__pycache__/
