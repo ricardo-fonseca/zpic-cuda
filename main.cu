@@ -82,9 +82,9 @@ int main() {
 
     float tmax = 4.0;
 
-    int2 ppc = {1,1};
-    float3 ufl = {0};
-    float3 uth = {0};
+    int2 ppc = {8,8};
+    float3 ufl = {1.0, 2.0, 3.0};
+    float3 uth = {0.1, 0.2, 0.3};
 
     Species electrons( "electrons", -1, ppc, 1.0, 
         ufl, uth, box, gnx, tnx, dt );

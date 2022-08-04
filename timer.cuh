@@ -77,6 +77,20 @@ class Timer {
             return delta;
         }
     }
+
+    __host__
+    /**
+     * @brief Printout timer 
+     * 
+     */
+    void report( std::string msg = "" ) {
+        if ( status < 1 ) {
+            std::cout << msg << " timer is not complete." << std::endl;
+        } else {
+            auto time = elapsed();
+            std::cout << msg << " elapsed time was " << time << " ms." << std::endl;
+        }
+    }
 };
 
 #endif

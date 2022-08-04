@@ -54,7 +54,10 @@ class Species {
     ~Species();
 
     __host__
-    void inject_particles( const int2 range[2] );
+    void inject_particles( );
+
+    __host__
+    void set_u();
 
     __host__
     void advance( EMF &emf, Current &current );

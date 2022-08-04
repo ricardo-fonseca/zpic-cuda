@@ -1,5 +1,13 @@
 # ZPIC CUDA Development
 
+## 2022.8.4
+
+* Improves particle initialization
+  * Implements step, slab, and sphere profiles
+  * Implements uth / ufl intialization
+* Implements simple random module for use in CUDA kernels
+  * Each thread must use its own state
+
 ## 2022.8.3
 
 * Implements initial Species class

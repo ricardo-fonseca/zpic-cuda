@@ -1,8 +1,13 @@
 #include "particles.cuh"
 #include <iostream>
 #include "tile_zdf.cuh"
+#include "timer.cuh"
+#include "random.cuh"
 
 #include "util.cuh"
+
+#include <cmath>
+#include <math.h>
 
 /**
  * @brief Construct a new Species:: Species object
@@ -25,6 +30,8 @@ Species::Species(const std::string name, const float m_q, const int2 ppc,
     std::cout << "(*info*) Initializing species " << name << " ..." << std::endl;
 
     q = copysign( 1.0f, m_q ) / (ppc.x * ppc.y);
+    dx.x = box.x / gnx.x;
+    dx.y = box.y / gnx.y;
 
     // Maximum number of particles per tile
     int np_max = tnx.x * tnx.y * ppc.x * ppc.y * 2;
@@ -35,11 +42,10 @@ Species::Species(const std::string name, const float m_q, const int2 ppc,
     // random = 
 
     // Inject particles
-    const int2 range[2] = { 
-        {0,0},
-        {gnx.x-1, gnx.y-1}
-    };
-    inject_particles( range );
+    inject_particles();
+
+    // Sets momentum of all particles
+    set_u();
 
     // Reset iteration numbers
     d_iter = 0;
@@ -58,14 +64,69 @@ Species::~Species() {
 
 }
 
-__global__ 
+__global__
 /**
- * @brief Injects particles in tile
+ * @brief Adds fluid momentum to particles
  * 
- * Currently only the following is supported:
- * - injecting particles on the whole tile
- * - 0 momenta
- * Buffer overflow is not verified!
+ * @param d_tile    Tile information
+ * @param d_u       Particle buffer (momenta)
+ * @param ufl       Fluid momentum to add
+ */
+void _set_uth_kernel( int2* __restrict__ d_tile, float3* __restrict__ d_u, 
+    const uint2 seed, const float3 uth, const float3 ufl ) {
+
+    // Tile ID
+    const int tid = blockIdx.y * gridDim.x + blockIdx.x;
+
+    // Initialize random state variables
+    uint2 state = { 
+        seed.x + tid * blockDim.x + threadIdx.x,
+        seed.y + tid * blockDim.x + threadIdx.x
+    };
+    double norm = NAN;
+
+    // Set particle momenta
+    const int offset = d_tile[ tid ].x;
+    const int np     = d_tile[ tid ].y;
+    float3 __restrict__ *u  = &d_u[ offset ];
+
+    for( int i = threadIdx.x; i < np; i+= blockDim.x ) {
+        u[i] = make_float3(
+            ufl.x + uth.x * _rand_norm( state, norm ),
+            ufl.y + uth.y * _rand_norm( state, norm ),
+            ufl.z + uth.z * _rand_norm( state, norm )
+        );
+    }
+}
+
+/**
+ * @brief Sets momentum of all particles in object using uth / ufl
+ * 
+ */
+void Species::set_u() {
+
+    Timer t;
+
+    // Set thermal momentum
+    dim3 grid( particles->nxtiles.x, particles->nxtiles.y );
+    dim3 block( 64 );
+    
+    t.start();
+
+    uint2 seed = {12345, 67890};
+    _set_uth_kernel <<< grid, block >>> ( 
+        particles -> d_tile, particles -> d_u, seed, uth, ufl
+    );
+
+    t.stop();
+    t.report("(*info*) set_u()");
+}
+
+
+/**
+ * @brief CUDA kernel for injecting uniform profile
+ * 
+ * This version does not require atomics
  * 
  * @param d_tile 
  * @param buffer_max 
@@ -73,6 +134,7 @@ __global__
  * @param d_x 
  * @param ppc 
  */
+__global__ 
 void _inject_part_kernel(
     int2* __restrict__ d_tile, size_t buffer_max,
     int2* __restrict__ d_ix, float2* __restrict__ d_x, float3* __restrict__ d_u,
@@ -119,21 +181,209 @@ void _inject_part_kernel(
     }
 
     // Update global number of particles in tile
-    if ( threadIdx.x == 0 ) {
+    if ( threadIdx.x == 0 )
         d_tile[ tid ].y = np + nx.x * nx.y * np_cell ;
+
+}
+
+
+/**
+ * @brief CUDA kernel for injecting step profile
+ * 
+ * This kernel must be launched using a 2D grid with 1 block per tile
+ * 
+ * @param step      Step position normalized to cell size
+ * @param ppc       Number of particles per cell
+ * @param nx        Tile size
+ * @param d_tile    Tile information
+ * @param d_ix      Particle buffer (cells)
+ * @param d_x       Particle buffer (positions)
+ * @param d_u       Particle buffer (momenta)
+ */
+__global__
+void _inject_step_kernel(
+    const float step, const int2 ppc, const int2 nx, int2* __restrict__ d_tile,
+    int2* __restrict__ d_ix, float2* __restrict__ d_x, float3* __restrict__ d_u ) {
+
+    const int tid = blockIdx.y * gridDim.x + blockIdx.x;
+
+    const int offset =  d_tile[ tid ].x;
+    int2   __restrict__ *ix = &d_ix[ offset ];
+    float2 __restrict__ *x  = &d_x[ offset ];
+    float3 __restrict__ *u  = &d_u[ offset ];
+
+    double dpcx = 1.0 / ppc.x;
+    double dpcy = 1.0 / ppc.y;
+
+    __shared__ int np;
+    np = d_tile[ tid ].y;
+
+    const int shiftx = blockIdx.x * nx.x;
+
+    for( int idx = threadIdx.x; idx < nx.y * nx.x; idx+= blockDim.x) {
+        const int2 cell = {
+            idx % nx.x,
+            idx / nx.y
+        };
+        for( int i1 = 0; i1 < ppc.y; i1++ ) {
+            for( int i0 = 0; i0 < ppc.x; i0++) {
+                const float2 pos = {
+                    static_cast<float>(dpcx * ( i0 + 0.5 )),
+                    static_cast<float>(dpcy * ( i1 + 0.5 ))
+                };
+                if ( shiftx + cell.x + pos.x > step ) {
+                    const int k = atomicAdd( &np, 1 );
+                    ix[ k ] = cell;
+                    x[ k ] = pos;
+                    u[ k ] = {0};
+                }
+            }
+        }
     }
+
+    if ( threadIdx.x == 0 )
+        d_tile[ tid ].y = np;
 }
 
 /**
- * @brief 
+ * @brief CUDA kernel for injecting slab profile
  * 
- * @param range 
+ * This kernel must be launched using a 2D grid with 1 block per tile
+ * 
+ * @param slab      slab start/end position normalized to cell size
+ * @param ppc       Number of particles per cell
+ * @param nx        Tile size
+ * @param d_tile    Tile information
+ * @param d_ix      Particle buffer (cells)
+ * @param d_x       Particle buffer (positions)
+ * @param d_u       Particle buffer (momenta)
  */
-void Species::inject_particles( const int2 range[2] ) {
+__global__
+void _inject_slab_kernel(
+    float2 slab, int2 ppc, int2 nx, int2* __restrict__ d_tile,
+    int2* __restrict__ d_ix, float2* __restrict__ d_x, float3* __restrict__ d_u
+) {
 
-    // Only full range injection is currently implemented
-    
+    const int tid = blockIdx.y * gridDim.x + blockIdx.x;
+
+    const int offset =  d_tile[ tid ].x;
+    int2   __restrict__ *ix = &d_ix[ offset ];
+    float2 __restrict__ *x  = &d_x[ offset ];
+    float3 __restrict__ *u  = &d_u[ offset ];
+
+    double dpcx = 1.0 / ppc.x;
+    double dpcy = 1.0 / ppc.y;
+
+    __shared__ int np;
+    np = d_tile[ tid ].y;
+
+    const int shiftx = blockIdx.x * nx.x;
+
+    for( int idx = threadIdx.x; idx < nx.y * nx.x; idx+= blockDim.x) {
+        const int2 cell = {
+            idx % nx.x,
+            idx / nx.y
+        };
+        for( int i1 = 0; i1 < ppc.y; i1++ ) {
+            for( int i0 = 0; i0 < ppc.x; i0++) {
+                const float2 pos = {
+                    static_cast<float>(dpcx * ( i0 + 0.5 )),
+                    static_cast<float>(dpcy * ( i1 + 0.5 ))
+                };
+                if ( shiftx + cell.x + pos.x > slab.x &&
+                        shiftx + cell.x + pos.x < slab.y ) {
+                    const int k = atomicAdd( &np, 1 );
+                    ix[ k ] = cell;
+                    x[ k ] = pos;
+                    u[ k ] = {0};
+                }
+            }
+        }
+    }
+
+    if ( threadIdx.x == 0 )
+        d_tile[ tid ].y = np;
+}
+
+/**
+ * @brief CUDA kernel for injecting sphere profile
+ * 
+ * This kernel must be launched using a 2D grid with 1 block per tile
+ * 
+ * @param center    sphere center in simulation units
+ * @param radius    sphere radius in simulation units
+ * @param dx        cell size in simulation units
+ * @param ppc       Number of particles per cell
+ * @param nx        Tile size
+ * @param d_tile    Tile information
+ * @param d_ix      Particle buffer (cells)
+ * @param d_x       Particle buffer (positions)
+ * @param d_u       Particle buffer (momenta)
+ */
+__global__
+void _inject_sphere_kernel(
+    float2 center, float radius, float2 dx, int2 ppc, int2 nx, int2* __restrict__ d_tile,
+    int2* __restrict__ d_ix, float2* __restrict__ d_x, float3* __restrict__ d_u
+) {
+
+    const int tid = blockIdx.y * gridDim.x + blockIdx.x;
+
+    const int offset =  d_tile[ tid ].x;
+    int2   __restrict__ *ix = &d_ix[ offset ];
+    float2 __restrict__ *x  = &d_x[ offset ];
+    float3 __restrict__ *u  = &d_u[ offset ];
+
+    double dpcx = 1.0 / ppc.x;
+    double dpcy = 1.0 / ppc.y;
+
+    __shared__ int np;
+    np = d_tile[ tid ].y;
+
+    const int shiftx = blockIdx.x * nx.x;
+    const int shifty = blockIdx.y * nx.y;
+    const float r2 = radius*radius;
+
+    for( int idx = threadIdx.x; idx < nx.y * nx.x; idx+= blockDim.x) {
+        const int2 cell = {
+            idx % nx.x,
+            idx / nx.y
+        };
+        for( int i1 = 0; i1 < ppc.y; i1++ ) {
+            for( int i0 = 0; i0 < ppc.x; i0++) {
+                const float2 pos = {
+                    static_cast<float>(dpcx * ( i0 + 0.5 )),
+                    static_cast<float>(dpcy * ( i1 + 0.5 ))
+                };
+                float gx = (shiftx + cell.x + pos.x) * dx.x;
+                float gy = (shifty + cell.y + pos.y) * dx.y;
+                
+                if ( (gx - center.x)*(gx - center.x) + (gy - center.y)*(gy - center.y) < r2 ) {
+                    const int k = atomicAdd( &np, 1 );
+                    ix[ k ] = cell;
+                    x[ k ] = pos;
+                    u[ k ] = {0};
+                }
+            }
+        }
+    }
+
+    if ( threadIdx.x == 0 )
+        d_tile[ tid ].y = np;
+}
+
+/**
+ * @brief Inject particles in the simulation box
+ * 
+ * Currently only injecting particles in the whole simulation box is supported.
+ * 
+ */
+void Species::inject_particles( ) {
+
     // Create particles
+
+/*
+    // Uniform density
+    
     dim3 grid( particles->nxtiles.x, particles->nxtiles.y );
     dim3 block( 64 );
 
@@ -141,6 +391,48 @@ void Species::inject_particles( const int2 range[2] ) {
         particles -> d_tile, particles -> buffer_max,
         particles -> d_ix, particles -> d_x, particles -> d_u, 
         particles -> nx, ppc
+    );
+*/
+
+/*
+    // Step density
+
+    float step = 12.8 / dx.x;
+
+    dim3 grid( particles->nxtiles.x, particles->nxtiles.y );
+    dim3 block( 32 );
+    _inject_step_kernel <<< grid, block >>> (
+        step, ppc, particles -> nx, 
+        particles -> d_tile, 
+        particles -> d_ix, particles -> d_x, particles -> d_u 
+    );
+*/
+
+/*
+    // Slab density
+    
+    float2 slab = { 10.f / dx.x, 20.f / dx.y };
+
+    dim3 grid( particles->nxtiles.x, particles->nxtiles.y );
+    dim3 block( 32 );
+    _inject_slab_kernel <<< grid, block >>> (
+        slab, ppc, particles -> nx, 
+        particles -> d_tile, 
+        particles -> d_ix, particles -> d_x, particles -> d_u 
+    );
+*/
+
+    // Sphere density
+
+    float2 center = { 12.8f, 6.4f};
+    float radius = 3.2f;
+
+    dim3 grid( particles->nxtiles.x, particles->nxtiles.y );
+    dim3 block( 32 );
+    _inject_sphere_kernel <<< grid, block >>> (
+        center, radius, dx, ppc, particles -> nx, 
+        particles -> d_tile, 
+        particles -> d_ix, particles -> d_x, particles -> d_u 
     );
 
 }
@@ -241,7 +533,6 @@ void Species::deposit_charge( Field &charge ) {
     );
 
 }
-
 
 /**
  * @brief Save particle data to file
