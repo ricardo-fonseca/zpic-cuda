@@ -2,6 +2,7 @@
 #define __TILE_VFLD__
 
 #include <cstddef>
+#include "tile_zdf.cuh"
 
 /**
  * @brief VFLD class
@@ -102,14 +103,29 @@ class VFLD {
     }
 
     /**
-     * @brief Updates guard cell values
-     * 
-     * Guard cell values are copied from neighboring tiles assuming periodic boundaries
-     * Values are copied along x first and then along y.
+     * @brief Copies edge values to neighboring guard cells
      * 
      */
     __host__
-    void update_gc();
+    void copy_to_gc();
+
+    __host__
+    /**
+     * @brief Adds values from neighboring guard cells to local data
+     * 
+     */
+    void add_from_gc();
+
+    __host__
+    /**
+     * @brief  Save field values to disk
+     * 
+    * @param   fc          Field component to save
+    * @param   info        Grid metadata (label, units, axis, etc.). Information is used to set file name
+    * @param   iteration   Iteration metadata
+    * @param   path        Path where to save the file
+     */
+    int save( const int fc, t_zdf_grid_info &info, t_zdf_iteration &iter, std::string path );
 };
 
 #endif

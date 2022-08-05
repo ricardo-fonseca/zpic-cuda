@@ -1,6 +1,7 @@
 #include "tile_vfld.cuh"
 #include <iostream>
-
+#include <string>
+#include "tile_zdf.cuh"
 
 /**
  * @brief Class vfld (float3 grid) constructor.
@@ -14,65 +15,65 @@
 __host__
 VFLD::VFLD( const int2 gnx_, const int2 tnx_, const int2 gc_[2] ) {
 
-    // Validate grid and tile sizes
-    if (( gnx_.x <= 0 ) || ( gnx_.y <= 0)) {
-        std::cerr << "(*error*) Invalid number of cells gnx: ";
-        std::cerr << gnx_.x << "," << gnx_.y << std::endl;
+// Validate grid and tile sizes
+if (( gnx_.x <= 0 ) || ( gnx_.y <= 0)) {
+    std::cerr << "(*error*) Invalid number of cells gnx: ";
+    std::cerr << gnx_.x << "," << gnx_.y << std::endl;
+    exit(1);
+}
+
+if (( tnx_.x <= 0 ) || ( tnx_.y <= 0)) {
+    std::cerr << "(*error*) Invalid tile size tnx: ";
+    std::cerr << tnx_.x << "," << tnx_.y << std::endl;
+    exit(1);
+}
+
+if ( gnx_.x % tnx_.x ) {
+    std::cerr << "(*error*) global x grid size, " << gnx_.x;
+    std::cerr << "is not a mutliple of x tile size, " << tnx_.x << "endl";
         exit(1);
-    }
+}
 
-    if (( tnx_.x <= 0 ) || ( tnx_.y <= 0)) {
-        std::cerr << "(*error*) Invalid tile size tnx: ";
-        std::cerr << tnx_.x << "," << tnx_.y << std::endl;
+if ( gnx_.y % tnx_.y ) {
+    std::cerr << "(*error*) global y grid size, " << gnx_.y;
+    std::cerr << "is not a mutliple of y tile size, " << tnx_.y << "endl";
         exit(1);
-    }
+}
 
-    if ( gnx_.x % tnx_.x ) {
-        std::cerr << "(*error*) global x grid size, " << gnx_.x;
-        std::cerr << "is not a mutliple of x tile size, " << tnx_.x << "endl";
-         exit(1);
-    }
+// Setup tile size
+nx = tnx_;
 
-    if ( gnx_.y % tnx_.y ) {
-        std::cerr << "(*error*) global y grid size, " << gnx_.y;
-        std::cerr << "is not a mutliple of y tile size, " << tnx_.y << "endl";
-         exit(1);
-    }
+// Setup guard cells
+if ( gc_ ) {
+    gc[0] = gc_[0];
+    gc[1] = gc_[1];
+} else {
+    gc[0] = int2{0};
+    gc[1] = int2{0};
+}
 
-    // Setup tile size
-    nx = tnx_;
+// Get number of tiles in each direction
+nxtiles.x = gnx_.x / tnx_.x;
+nxtiles.y = gnx_.y / tnx_.y;
 
-    // Setup guard cells
-    if ( gc_ ) {
-        gc[0] = gc_[0];
-        gc[1] = gc_[1];
-    } else {
-        gc[0] = int2{0};
-        gc[1] = int2{0};
-    }
+// Allocate global buffers
+size_t bsize = buffer_size( ) * sizeof(float3);
 
-    // Get number of tiles in each direction
-    nxtiles.x = gnx_.x / tnx_.x;
-    nxtiles.y = gnx_.y / tnx_.y;
+cudaError_t err;
 
-    // Allocate global buffers
-    size_t bsize = buffer_size( ) * sizeof(float3);
+err = cudaMallocHost( &buffer, bsize );
+if ( err != cudaSuccess ) {
+    std::cerr << "(*error*) Unable to allocate host memory for float3 tiled grid." << std::endl;
+    std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
+    return;
+}
 
-    cudaError_t err;
-
-    err = cudaMallocHost( &buffer, bsize );
-    if ( err != cudaSuccess ) {
-        std::cerr << "(*error*) Unable to allocate host memory for float3 tiled grid." << std::endl;
-        std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
-        return;
-    }
-
-    err = cudaMalloc( &d_buffer, bsize );
-    if ( err != cudaSuccess ) {
-        std::cerr << "(*error*) Unable to allocate device memory for float3 tiled grid." << std::endl;
-        std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
-        return;
-    }
+err = cudaMalloc( &d_buffer, bsize );
+if ( err != cudaSuccess ) {
+    std::cerr << "(*error*) Unable to allocate device memory for float3 tiled grid." << std::endl;
+    std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
+    return;
+}
 }
 
 /**
@@ -83,29 +84,29 @@ VFLD::VFLD( const int2 gnx_, const int2 tnx_, const int2 gc_[2] ) {
 __host__
 VFLD::~VFLD() {
 
-    cudaError_t err;
+cudaError_t err;
 
-    // Free host memory
-    err = cudaFreeHost( buffer );
-    if ( err != cudaSuccess ) {
-        std::cerr << "(*error*) Unable to free host memory for float3 tiled grid." << std::endl;
-        std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
-    }
-    buffer = NULL;
+// Free host memory
+err = cudaFreeHost( buffer );
+if ( err != cudaSuccess ) {
+    std::cerr << "(*error*) Unable to free host memory for float3 tiled grid." << std::endl;
+    std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
+}
+buffer = NULL;
 
-    // Free device memory
-    err = cudaFree( d_buffer );
-    if ( err != cudaSuccess ) {
-        std::cerr << "(*error*) Unable to free device memory for float3 tiled grid." << std::endl;
-        std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
-    }
-    d_buffer = NULL;
+// Free device memory
+err = cudaFree( d_buffer );
+if ( err != cudaSuccess ) {
+    std::cerr << "(*error*) Unable to free device memory for float3 tiled grid." << std::endl;
+    std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
+}
+d_buffer = NULL;
 
-    nx = int2{0};
-    gc[0] = int2{0};
-    gc[1] = int2{0};
+nx = int2{0};
+gc[0] = int2{0};
+gc[1] = int2{0};
 
-    nxtiles = int2{0};
+nxtiles = int2{0};
 }
 
 /**
@@ -119,20 +120,20 @@ VFLD::~VFLD() {
 __host__
 int VFLD::zero( ) {
 
-    size_t size = buffer_size( ) * sizeof(float3);
+size_t size = buffer_size( ) * sizeof(float3);
 
-    // zero GPU data
-    cudaError_t err = cudaMemset( d_buffer, 0, size );
-    if ( err != cudaSuccess ) {
-        std::cerr << "(*error*) Unable to zero device memory for float3 tiled grid." << std::endl;
-        std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
-        return -1;
-    }
+// zero GPU data
+cudaError_t err = cudaMemset( d_buffer, 0, size );
+if ( err != cudaSuccess ) {
+    std::cerr << "(*error*) Unable to zero device memory for float3 tiled grid." << std::endl;
+    std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
+    return -1;
+}
 
-    // zero CPU data
-    memset( buffer, 0, size );
+// zero CPU data
+memset( buffer, 0, size );
 
-    return 0;
+return 0;
 }
 
 
@@ -145,8 +146,8 @@ int VFLD::zero( ) {
  */
 __global__
 void _set_kernel( float3* d_buffer, const float3 val, size_t size ) {
-    const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if ( idx < size ) d_buffer[idx] = val;
+const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+if ( idx < size ) d_buffer[idx] = val;
 }
 
 /**
@@ -158,18 +159,18 @@ void _set_kernel( float3* d_buffer, const float3 val, size_t size ) {
 __host__
 void VFLD :: set( const float3 val ) {
 
-    const size_t size = buffer_size( );
+const size_t size = buffer_size( );
 
-    const int nthreads = 32;
-    int nblocks = size / nthreads;
-    if ( nthreads * nblocks < size ) nblocks++;
+const int nthreads = 32;
+int nblocks = size / nthreads;
+if ( nthreads * nblocks < size ) nblocks++;
 
-    _set_kernel <<< nblocks, nthreads >>> ( d_buffer, val, size );
+_set_kernel <<< nblocks, nthreads >>> ( d_buffer, val, size );
 
-    // set CPU data
-    for( size_t i = 0; i < size; i++ ) {
-        buffer[i] = val;
-    }
+// set CPU data
+for( size_t i = 0; i < size; i++ ) {
+    buffer[i] = val;
+}
 }
 
 /**
@@ -180,25 +181,25 @@ void VFLD :: set( const float3 val ) {
  */
 __host__
 int VFLD :: update_data( const copy_direction direction ) {
-    cudaError_t err;
-    size_t size = buffer_size( ) * sizeof(float3);
+cudaError_t err;
+size_t size = buffer_size( ) * sizeof(float3);
 
-    switch( direction ) {
-        case host_device:  // Host to device
-            err = cudaMemcpy( d_buffer, buffer, size, cudaMemcpyHostToDevice );
-            break;
-        case device_host: // Device to host
-            err = cudaMemcpy( buffer, d_buffer, size, cudaMemcpyDeviceToHost );
-            break;
-    }
+switch( direction ) {
+    case host_device:  // Host to device
+        err = cudaMemcpy( d_buffer, buffer, size, cudaMemcpyHostToDevice );
+        break;
+    case device_host: // Device to host
+        err = cudaMemcpy( buffer, d_buffer, size, cudaMemcpyDeviceToHost );
+        break;
+}
 
-    if ( err != cudaSuccess ) {
-        std::cerr << "(*error*) Unable copy data in vfld_update()." << std::endl;
-        std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
-        return -1;
-    }
+if ( err != cudaSuccess ) {
+    std::cerr << "(*error*) Unable copy data in vfld_update()." << std::endl;
+    std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
+    return -1;
+}
 
-    return 0;
+return 0;
 }
 
 #if 0
@@ -214,30 +215,30 @@ int VFLD :: update_data( const copy_direction direction ) {
  */
 __global__
 void _gather_kernelx( float * out, float3 * in,
-    int2 const gnx, int2 const int_nx, int2 const ext_nx ) {
+int2 const gnx, int2 const int_nx, int2 const ext_nx ) {
 
-    const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
 
-    if ( idx < gnx.x * gnx.y ) {
+if ( idx < gnx.x * gnx.y ) {
 
-        size_t vol_int = int_nx.x * int_nx.y;
+    size_t vol_int = int_nx.x * int_nx.y;
 
-        int tile = idx / vol_int;
-        int tidx = idx - tile * vol_int;
+    int tile = idx / vol_int;
+    int tidx = idx - tile * vol_int;
 
-        // Position inside tile
-        int iy = tidx / int_nx.x;
-        int ix = tidx - iy * int_nx.x;
+    // Position inside tile
+    int iy = tidx / int_nx.x;
+    int ix = tidx - iy * int_nx.x;
 
-        size_t in_idx = ( tile * ext_nx.y + iy ) * ext_nx.x + ix;
+    size_t in_idx = ( tile * ext_nx.y + iy ) * ext_nx.x + ix;
 
-        int ntiles_x =  gnx.x / int_nx.x;
-        int tile_y = tile / ntiles_x;
-        int tile_x = tile - tile_y * ntiles_x;
+    int ntiles_x =  gnx.x / int_nx.x;
+    int tile_y = tile / ntiles_x;
+    int tile_x = tile - tile_y * ntiles_x;
 
-        size_t out_idx = ( tile_y * int_nx.y + iy ) * gnx.x + ( tile_x * int_nx.x + ix );
-        out[ out_idx ] = in[ in_idx ].x;
-    }
+    size_t out_idx = ( tile_y * int_nx.y + iy ) * gnx.x + ( tile_x * int_nx.x + ix );
+    out[ out_idx ] = in[ in_idx ].x;
+}
 }
 
 
@@ -253,72 +254,72 @@ void _gather_kernelx( float * out, float3 * in,
 __host__
 int VFLD :: gather( const int fc, float * data ) {
 
-    // Output data x, y dimensions
-    int2 gsize = { 
-        .x = nxtiles.x * nx.x,
-        .y = nxtiles.y * nx.y
-    };
+// Output data x, y dimensions
+int2 gsize = { 
+    .x = nxtiles.x * nx.x,
+    .y = nxtiles.y * nx.y
+};
 
-    float* d_data;
-    cudaError_t err;
-    ssize_t size = gsize.x * gsize.y;
+float* d_data;
+cudaError_t err;
+ssize_t size = gsize.x * gsize.y;
 
-    err = cudaMalloc( &d_data, size * sizeof(float));
-    if ( err != cudaSuccess ) {
-        std::cerr << "(*error*) Unable to allocate device memory for vfld_gather()." << std::endl;
-        std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
-        return -1;
-    }
+err = cudaMalloc( &d_data, size * sizeof(float));
+if ( err != cudaSuccess ) {
+    std::cerr << "(*error*) Unable to allocate device memory for vfld_gather()." << std::endl;
+    std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
+    return -1;
+}
 
-    // Tile block size (grid + guard cells)
-    int2 ext_nx = {
-        .x = gc[0].x +  nx.x + gc[1].x,
-        .y = gc[0].y +  nx.y + gc[1].y
-    };
+// Tile block size (grid + guard cells)
+int2 ext_nx = {
+    .x = gc[0].x +  nx.x + gc[1].x,
+    .y = gc[0].y +  nx.y + gc[1].y
+};
 
-    int offset = gc[0].y * ext_nx.x + gc[0].x;
-    
-    // Gather data on device
-    const int nthreads = 32;
-    int nblocks = size / nthreads;
-    if ( nthreads * nblocks < size ) nblocks++;
+int offset = gc[0].y * ext_nx.x + gc[0].x;
 
-    switch (fc) {
+// Gather data on device
+const int nthreads = 32;
+int nblocks = size / nthreads;
+if ( nthreads * nblocks < size ) nblocks++;
+
+switch (fc) {
 /*
-        case 2:
-            _gather_kernelz <<< nblocks, nthreads >>> ( 
-                d_data, d_buffer + offset, size,
-                nx, ext_nx );
-            break;
-        case 1:
-            _gather_kernely <<< nblocks, nthreads >>> ( 
-                d_data, d_buffer + offset, size,
-                nx, ext_nx );
-            break;
+    case 2:
+        _gather_kernelz <<< nblocks, nthreads >>> ( 
+            d_data, d_buffer + offset, size,
+            nx, ext_nx );
+        break;
+    case 1:
+        _gather_kernely <<< nblocks, nthreads >>> ( 
+            d_data, d_buffer + offset, size,
+            nx, ext_nx );
+        break;
 */
-        default:
-            _gather_kernelx <<< nblocks, nthreads >>> ( 
-                d_data, d_buffer + offset, gsize,
-                nx, ext_nx );
-    }
+    default:
+        _gather_kernelx <<< nblocks, nthreads >>> ( 
+            d_data, d_buffer + offset, gsize,
+            nx, ext_nx );
+}
 
-    // Copy data to local buffer
-    err = cudaMemcpy( data, d_data, size * sizeof(float), cudaMemcpyDeviceToHost );
-    if ( err != cudaSuccess ) {
-        std::cerr << "(*error*) Unable to copy data back to cpu in vfld_gather()." << std::endl;
-        std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
-        return -1;
-    }
+// Copy data to local buffer
+err = cudaMemcpy( data, d_data, size * sizeof(float), cudaMemcpyDeviceToHost );
+if ( err != cudaSuccess ) {
+    std::cerr << "(*error*) Unable to copy data back to cpu in vfld_gather()." << std::endl;
+    std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
+    return -1;
+}
 
-    // Free temporary device memory
-    err = cudaFree( d_data );
-    if ( err != cudaSuccess ) {
-        std::cerr << "(*error*) Unable to free device memory in vfld_gather()." << std::endl;
-        std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
-        return -1;
-    }
+// Free temporary device memory
+err = cudaFree( d_data );
+if ( err != cudaSuccess ) {
+    std::cerr << "(*error*) Unable to free device memory in vfld_gather()." << std::endl;
+    std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
+    return -1;
+}
 
-    return 0;
+return 0;
 }
 
 #endif
@@ -335,24 +336,24 @@ int VFLD :: gather( const int fc, float * data ) {
  */
 __global__
 void _gather_kernelx( float * out, float3 * in,
-    int2 const gnx, int2 const int_nx, int2 const ext_nx ) {
+int2 const gnx, int2 const int_nx, int2 const ext_nx ) {
 
-    int    tile_id  = blockIdx.y * gridDim.x + blockIdx.x;
-    size_t tile_off = tile_id * ext_nx.x * ext_nx.y;
+int    tile_id  = blockIdx.y * gridDim.x + blockIdx.x;
+size_t tile_off = tile_id * ext_nx.x * ext_nx.y;
 
-    for( int i = threadIdx.x; i < int_nx.x * int_nx.y; i+= blockDim.x ) {
-        int const ix = i % int_nx.x;
-        int const iy = i / int_nx.x;
+for( int i = threadIdx.x; i < int_nx.x * int_nx.y; i+= blockDim.x ) {
+    int const ix = i % int_nx.x;
+    int const iy = i / int_nx.x;
 
-        size_t const in_idx = tile_off + iy * ext_nx.x + ix;
+    size_t const in_idx = tile_off + iy * ext_nx.x + ix;
 
-        int const gix = blockIdx.x * int_nx.x + ix;
-        int const giy = blockIdx.y * int_nx.y + iy;
+    int const gix = blockIdx.x * int_nx.x + ix;
+    int const giy = blockIdx.y * int_nx.y + iy;
 
-        size_t const out_idx = giy * gnx.x + gix;
+    size_t const out_idx = giy * gnx.x + gix;
 
-        out[ out_idx ] = in[ in_idx ].x;
-    }
+    out[ out_idx ] = in[ in_idx ].x;
+}
 }
 
 /**
@@ -366,24 +367,24 @@ void _gather_kernelx( float * out, float3 * in,
  */
 __global__
 void _gather_kernely( float * out, float3 * in,
-    int2 const gnx, int2 const int_nx, int2 const ext_nx ) {
+int2 const gnx, int2 const int_nx, int2 const ext_nx ) {
 
-    int    tile_id  = blockIdx.y * gridDim.x + blockIdx.x;
-    size_t tile_off = tile_id * ext_nx.x * ext_nx.y;
+int    tile_id  = blockIdx.y * gridDim.x + blockIdx.x;
+size_t tile_off = tile_id * ext_nx.x * ext_nx.y;
 
-    for( int i = threadIdx.x; i < int_nx.x * int_nx.y; i+= blockDim.x ) {
-        int const ix = i % int_nx.x;
-        int const iy = i / int_nx.x;
+for( int i = threadIdx.x; i < int_nx.x * int_nx.y; i+= blockDim.x ) {
+    int const ix = i % int_nx.x;
+    int const iy = i / int_nx.x;
 
-        size_t const in_idx = tile_off + iy * ext_nx.x + ix;
+    size_t const in_idx = tile_off + iy * ext_nx.x + ix;
 
-        int const gix = blockIdx.x * int_nx.x + ix;
-        int const giy = blockIdx.y * int_nx.y + iy;
+    int const gix = blockIdx.x * int_nx.x + ix;
+    int const giy = blockIdx.y * int_nx.y + iy;
 
-        size_t const out_idx = giy * gnx.x + gix;
+    size_t const out_idx = giy * gnx.x + gix;
 
-        out[ out_idx ] = in[ in_idx ].y;
-    }
+    out[ out_idx ] = in[ in_idx ].y;
+}
 }
 /**
  * @brief CUDA kernel for VFLD::gather(z)
@@ -396,24 +397,24 @@ void _gather_kernely( float * out, float3 * in,
  */
 __global__
 void _gather_kernelz( float * out, float3 * in,
-    int2 const gnx, int2 const int_nx, int2 const ext_nx ) {
+int2 const gnx, int2 const int_nx, int2 const ext_nx ) {
 
-    int    tile_id  = blockIdx.y * gridDim.x + blockIdx.x;
-    size_t tile_off = tile_id * ext_nx.x * ext_nx.y;
+int    tile_id  = blockIdx.y * gridDim.x + blockIdx.x;
+size_t tile_off = tile_id * ext_nx.x * ext_nx.y;
 
-    for( int i = threadIdx.x; i < int_nx.x * int_nx.y; i+= blockDim.x ) {
-        int const ix = i % int_nx.x;
-        int const iy = i / int_nx.x;
+for( int i = threadIdx.x; i < int_nx.x * int_nx.y; i+= blockDim.x ) {
+    int const ix = i % int_nx.x;
+    int const iy = i / int_nx.x;
 
-        size_t const in_idx = tile_off + iy * ext_nx.x + ix;
+    size_t const in_idx = tile_off + iy * ext_nx.x + ix;
 
-        int const gix = blockIdx.x * int_nx.x + ix;
-        int const giy = blockIdx.y * int_nx.y + iy;
+    int const gix = blockIdx.x * int_nx.x + ix;
+    int const giy = blockIdx.y * int_nx.y + iy;
 
-        size_t const out_idx = giy * gnx.x + gix;
+    size_t const out_idx = giy * gnx.x + gix;
 
-        out[ out_idx ] = in[ in_idx ].z;
-    }
+    out[ out_idx ] = in[ in_idx ].z;
+}
 }
 
 /**
@@ -428,69 +429,69 @@ void _gather_kernelz( float * out, float3 * in,
 __host__
 int VFLD :: gather( const int fc, float * data ) {
 
-    // Output data x, y dimensions
-    int2 gsize = { 
-        .x = nxtiles.x * nx.x,
-        .y = nxtiles.y * nx.y
-    };
+// Output data x, y dimensions
+int2 gsize = { 
+    .x = nxtiles.x * nx.x,
+    .y = nxtiles.y * nx.y
+};
 
-    float* d_data;
-    cudaError_t err;
-    ssize_t size = gsize.x * gsize.y;
+float* d_data;
+cudaError_t err;
+ssize_t size = gsize.x * gsize.y;
 
-    err = cudaMalloc( &d_data, size * sizeof(float));
-    if ( err != cudaSuccess ) {
-        std::cerr << "(*error*) Unable to allocate device memory for vfld_gather()." << std::endl;
-        std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
-        return -1;
-    }
+err = cudaMalloc( &d_data, size * sizeof(float));
+if ( err != cudaSuccess ) {
+    std::cerr << "(*error*) Unable to allocate device memory for vfld_gather()." << std::endl;
+    std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
+    return -1;
+}
 
-    // Tile block size (grid + guard cells)
-    int2 ext_nx = {
-        .x = gc[0].x +  nx.x + gc[1].x,
-        .y = gc[0].y +  nx.y + gc[1].y
-    };
+// Tile block size (grid + guard cells)
+int2 ext_nx = {
+    .x = gc[0].x +  nx.x + gc[1].x,
+    .y = gc[0].y +  nx.y + gc[1].y
+};
 
-    int offset = gc[0].y * ext_nx.x + gc[0].x;
-    
-    // Gather data on device
-    dim3 block( 64 );
-    dim3 grid( nxtiles.x, nxtiles.y );
+int offset = gc[0].y * ext_nx.x + gc[0].x;
 
-    switch (fc) {
-        case 2:
-            _gather_kernelz <<< grid, block >>> ( 
-                d_data, d_buffer + offset, gsize,
-                nx, ext_nx );
-            break;
-        case 1:
-            _gather_kernely <<< grid, block >>> ( 
-                d_data, d_buffer + offset, gsize,
-                nx, ext_nx );
-            break;
-        default:
-            _gather_kernelx <<< grid, block >>> ( 
-                d_data, d_buffer + offset, gsize,
-                nx, ext_nx );
-    }
+// Gather data on device
+dim3 block( 64 );
+dim3 grid( nxtiles.x, nxtiles.y );
 
-    // Copy data to local buffer
-    err = cudaMemcpy( data, d_data, size * sizeof(float), cudaMemcpyDeviceToHost );
-    if ( err != cudaSuccess ) {
-        std::cerr << "(*error*) Unable to copy data back to cpu in vfld_gather()." << std::endl;
-        std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
-        return -1;
-    }
+switch (fc) {
+    case 2:
+        _gather_kernelz <<< grid, block >>> ( 
+            d_data, d_buffer + offset, gsize,
+            nx, ext_nx );
+        break;
+    case 1:
+        _gather_kernely <<< grid, block >>> ( 
+            d_data, d_buffer + offset, gsize,
+            nx, ext_nx );
+        break;
+    default:
+        _gather_kernelx <<< grid, block >>> ( 
+            d_data, d_buffer + offset, gsize,
+            nx, ext_nx );
+}
 
-    // Free temporary device memory
-    err = cudaFree( d_data );
-    if ( err != cudaSuccess ) {
-        std::cerr << "(*error*) Unable to free device memory in vfld_gather()." << std::endl;
-        std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
-        return -1;
-    }
+// Copy data to local buffer
+err = cudaMemcpy( data, d_data, size * sizeof(float), cudaMemcpyDeviceToHost );
+if ( err != cudaSuccess ) {
+    std::cerr << "(*error*) Unable to copy data back to cpu in vfld_gather()." << std::endl;
+    std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
+    return -1;
+}
 
-    return 0;
+// Free temporary device memory
+err = cudaFree( d_data );
+if ( err != cudaSuccess ) {
+    std::cerr << "(*error*) Unable to free device memory in vfld_gather()." << std::endl;
+    std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
+    return -1;
+}
+
+return 0;
 }
 
 
@@ -538,7 +539,6 @@ void VFLD::add( const VFLD &rhs ) {
 }
 
 
-
 /**
  * @brief CUDA kernel for updating guard cell values along x direction
  * 
@@ -549,7 +549,7 @@ void VFLD::add( const VFLD &rhs ) {
  * @param gcx1      Number of guard cells at the upper x boundary
  */
 __global__
-void _update_gcx_kernel( float3 * buffer, const int2 ext_nx, const int2 int_nx,
+void _copy_gcx_kernel( float3 * buffer, const int2 ext_nx, const int2 int_nx,
     const int gcx0, const int gcx1 ) {
 
     // Find neighbours
@@ -592,7 +592,7 @@ void _update_gcx_kernel( float3 * buffer, const int2 ext_nx, const int2 int_nx,
  * @param gcy1      Number of guard cells at the upper y boundary
  */
 __global__
-void _update_gcy_kernel( float3 * buffer, const int2 ext_nx, const int2 int_nx,
+void _copy_gcy_kernel( float3 * buffer, const int2 ext_nx, const int2 int_nx,
     const int gcy0, const int gcy1 ) {
 
     // Find neighbours
@@ -626,25 +626,187 @@ void _update_gcy_kernel( float3 * buffer, const int2 ext_nx, const int2 int_nx,
 }
 
 /**
- * @brief Updates guard cell values
- * 
- * Guard cell values are copied from neighboring tiles assuming periodic boundaries
- * Values are copied along x first and then along y.
+ * @brief Copies edge valies to neighboring guard cells
  * 
  */
-void VFLD::update_gc() {
+__host__
+void VFLD::copy_to_gc() {
 
     int2 ext = ext_nx();
 
     dim3 block( 64 );
     dim3 grid( nxtiles.x, nxtiles.y );
 
-    _update_gcx_kernel <<< grid, block >>> (
+    _copy_gcx_kernel <<< grid, block >>> (
         d_buffer, ext, nx, gc[0].x, gc[1].x
     );
 
-    _update_gcy_kernel <<< grid, block >>> (
+    _copy_gcy_kernel <<< grid, block >>> (
+        d_buffer, ext, nx, gc[0].y, gc[1].y
+    );
+};
+
+
+/**
+ * @brief CUDA kernel for adding guard cell values along x direction
+ * 
+ * Values from neighbouring tile guard cells are added to local tile
+ * 
+ * @param buffer    Global data buffer (no offset)
+ * @param ext_nx    External tile size
+ * @param int_nx    Internal tile size
+ * @param gcx0      Number of guard cells at the lower x boundary
+ * @param gcx1      Number of guard cells at the upper x boundary
+ */
+__global__
+void _add_gcx_kernel( float3 * buffer, const int2 ext_nx, const int2 int_nx,
+    const int gcx0, const int gcx1 ) {
+
+    // Find neighbours
+    const int y_coord = blockIdx.y;
+    const int x_coord = blockIdx.x;
+
+    const int x_lcoord  = ((x_coord > 0)? x_coord : gridDim.x) - 1;
+    const int x_ucoord  = ((x_coord < gridDim.x-1)? x_coord : 0) + 1;
+
+    const int tile_vol = ext_nx.x * ext_nx.y;
+
+    float3 * __restrict__ local   = buffer + (y_coord * gridDim.x + x_coord ) * tile_vol;
+    float3 * __restrict__ x_lower = buffer + (y_coord * gridDim.x + x_lcoord) * tile_vol;
+    float3 * __restrict__ x_upper = buffer + (y_coord * gridDim.x + x_ucoord) * tile_vol;
+
+    // j = [0 .. ext_nx.y[
+    // i = [0 .. gc1[
+    for( int idx = threadIdx.x; idx < ext_nx.y * gcx1; idx += blockDim.x ) {
+        const int i = idx % gcx1;
+        const int j = idx / gcx1;
+        float3 a = local[ gcx0 + i + j * ext_nx.x ];
+        float3 b = x_lower[ gcx0 + int_nx.x + i + j * ext_nx.x ];
+        a.x += b.x; a.y += b.y; a.z += b.z;
+        local[ gcx0 + i + j * ext_nx.x ] = a;
+    }
+
+    // j = [0 .. ext_nx.y[
+    // i = [0 .. gc0[
+    for( int idx = threadIdx.x; idx < ext_nx.y * gcx0; idx += blockDim.x ) {
+        const int i = idx % gcx0;
+        const int j = idx / gcx0;
+        float3 a = local[ int_nx.x - gcx0 + i + j * ext_nx.x ];
+        float3 b = x_upper[ i + j * ext_nx.x ];
+        a.x += b.x; a.y += b.y; a.z += b.z;
+        local[ int_nx.x - gcx0 + i + j * ext_nx.x ] = a;
+    }
+}
+
+/**
+ * @brief CUDA kernel for adding guard cell values along y direction
+ * 
+ * Values from neighbouring tile guard cells are added to local tile
+ * 
+ * @param buffer    Global data buffer (no offset)
+ * @param ext_nx    External tile size
+ * @param int_nx    Internal tile size
+ * @param gcy0      Number of guard cells at the lower y boundary
+ * @param gcy1      Number of guard cells at the upper y boundary
+ */
+__global__
+void _add_gcy_kernel( float3 * buffer, const int2 ext_nx, const int2 int_nx,
+    const int gcy0, const int gcy1 ) {
+
+    // Find neighbours
+    const int y_coord = blockIdx.y;
+    const int x_coord = blockIdx.x;
+
+    const int y_lcoord  = ((y_coord > 0)? y_coord : gridDim.y) - 1;
+    const int y_ucoord  = ((y_coord < gridDim.y-1)? y_coord : 0) + 1;
+
+    const int tile_vol = ext_nx.x * ext_nx.y;
+
+    float3 * __restrict__ local   = buffer + (y_coord  * gridDim.x + x_coord ) * tile_vol;
+    float3 * __restrict__ y_lower = buffer + (y_lcoord * gridDim.x + x_coord ) * tile_vol;
+    float3 * __restrict__ y_upper = buffer + (y_ucoord * gridDim.x + x_coord ) * tile_vol;
+
+    // j = [0 .. gcy1[
+    // i = [0 .. ext_nx.x[
+    for( int idx = threadIdx.x; idx < gcy1 * ext_nx.x; idx += blockDim.x ) {
+        const int i = idx % ext_nx.x;
+        const int j = idx / ext_nx.x;
+        float3 a = local[ i + (j + gcy0) * ext_nx.x ];
+        float3 b = y_lower[ i + (gcy0 + int_nx.y + j) * ext_nx.x ];
+        a.x += b.x; a.y += b.y; a.z += b.z;
+        local[ i + (j + gcy0) * ext_nx.x ] = a;
+    }
+
+    // j = [0 .. gcy0[
+    // i = [0 .. ext_nx.x[
+    for( int idx = threadIdx.x; idx < gcy0 * ext_nx.x; idx += blockDim.x ) {
+        const int i = idx % ext_nx.x;
+        const int j = idx / ext_nx.x;
+        float3 a = local[ i + ( int_nx.y - gcy0 + j ) * ext_nx.x ];
+        float3 b = y_upper[ i + j * ext_nx.x ];
+        a.x += b.x; a.y += b.y; a.z += b.z;
+        local[ i + ( int_nx.y - gcy0 + j ) * ext_nx.x ] = a;
+    }
+}
+
+/**
+ * @brief Adds values from neighboring guard cells to local data
+ * 
+ */
+__host__
+void VFLD::add_from_gc() {
+
+    int2 ext = ext_nx();
+
+    dim3 block( 64 );
+    dim3 grid( nxtiles.x, nxtiles.y );
+
+    std::cout << "(*info*) gc.x = " << gc[0].x << ", " << gc[1].x << std::endl;
+
+    _add_gcx_kernel <<< grid, block >>> (
+        d_buffer, ext, nx, gc[0].x, gc[1].x
+    );
+
+    _add_gcy_kernel <<< grid, block >>> (
         d_buffer, ext, nx, gc[0].y, gc[1].y
     );
 
+};
+
+
+__host__
+/**
+ * @brief  Save field values to disk
+ * 
+* @param   fc          Field component to save
+* @param   info        Grid metadata (label, units, axis, etc.). Information is used to set file name
+* @param   iter        Iteration metadata
+* @param   path        Path where to save the file
+*/
+int VFLD::save( const int fc, t_zdf_grid_info &info, t_zdf_iteration &iter, std::string path ){
+    const size_t size = ( nxtiles.x * nx.x ) *
+                        ( nxtiles.y * nx.y ) *
+                        sizeof( float );
+
+    float *data;
+    cudaError_t err;
+    err = cudaMallocHost( &data, size );
+    if ( err != cudaSuccess ) {
+        std::cerr << "(*error*) Unable to allocate data on cpu for " << __func__ << "()." << std::endl;
+        std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
+        return -1;
+    }
+
+    gather( fc, data );
+
+    zdf_save_grid( data, info, iter, path );
+
+    err = cudaFreeHost( data );
+    if ( err != cudaSuccess ) {
+        std::cerr << "(*error*) Unable to free data on cpu for " << __func__ << "()." << std::endl;
+        std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
+        return -1;
+    }
+
+    return 0;
 }

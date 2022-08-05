@@ -7,17 +7,16 @@
  * 
  * @param gnx   Global grid size
  * @param tnx   Tile grid size
- * @param box_  Simulation box dimensions
- * @param dt_   Time step size
+ * @param box   Simulation box dimensions
+ * @param dt    Time step size
  */
 __host__
-EMF::EMF( const int2 gnx, const int2 tnx, const float2 box_, const float dt_ ) {
+EMF::EMF( const int2 gnx, const int2 tnx, const float2 box, const float dt ) :
+    box{box}, dt{dt} {
 
     std::cout << "(*info*) Initialize emf..." << std::endl;
 
     // Set box limits, cells sizes and time step
-    box = box_;
-    dt = dt_;
     dx.x = box.x / gnx.x;
     dx.y = box.y / gnx.y;
 
@@ -139,7 +138,18 @@ void yee_e( float3 * E, float3 * B, int2 nx,
 }
 
 
-__global__ void yee_kernel( float3 * d_E, float3 * d_B, int2 int_nx, int offset, 
+__global__ 
+/**
+ * @brief CUDA kernel for advancing EM field 1 timestep
+ * 
+ * @param d_E       E field grid
+ * @param d_B       B field grid
+ * @param int_nx    Tile size (internal)
+ * @param offset    Offset to position (0,0) on tile
+ * @param ext_nx    Tile size (external) i.e including guard cells
+ * @param dt_dx     Time step over cell size
+ */
+void yee_kernel( float3 * d_E, float3 * d_B, int2 int_nx, int offset, 
     int2 ext_nx, float2 dt_dx ) {
 
     extern __shared__ float3 buffer[];
@@ -210,8 +220,8 @@ void EMF::advance() {
     );
 
     // Update guard cells with new values
-    E -> update_gc();
-    B -> update_gc();
+    E -> copy_to_gc();
+    B -> copy_to_gc();
 
     // Advance internal iteration number
     d_iter += 1;
@@ -311,7 +321,7 @@ void EMF::report( const diag_fld field, const int fc ) {
     	.time_units = (char *) "1/\\omega_p"
     };
 
-    zdf_save_tile_vfld( *f, fc, &info, &iter, "EMF" );
+    f -> save( fc, info, iter, "EMF" );
 }
 
 /**

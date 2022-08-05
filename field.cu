@@ -102,7 +102,7 @@ void _add_gcx_kernel( float * buffer, const int2 ext_nx, const int2 int_nx,
     for( int idx = threadIdx.x; idx < ext_nx.y * gcx1; idx += blockDim.x ) {
         const int i = idx % gcx1;
         const int j = idx / gcx1;
-        local[ i + j * ext_nx.x ] += x_lower[ gcx0 + int_nx.x + i + j * ext_nx.x ];
+        local[ gcx0 + i + j * ext_nx.x ] += x_lower[ gcx0 + int_nx.x + i + j * ext_nx.x ];
     }
 
     // j = [0 .. ext_nx.y[
@@ -110,7 +110,7 @@ void _add_gcx_kernel( float * buffer, const int2 ext_nx, const int2 int_nx,
     for( int idx = threadIdx.x; idx < ext_nx.y * gcx0; idx += blockDim.x ) {
         const int i = idx % gcx0;
         const int j = idx / gcx0;
-        local[ int_nx.x + i + j * ext_nx.x ] += x_upper[ i + j * ext_nx.x ];
+        local[ int_nx.x - gcx0 + i + j * ext_nx.x ] += x_upper[ i + j * ext_nx.x ];
     }
 }
 
@@ -147,7 +147,7 @@ void _add_gcy_kernel( float * buffer, const int2 ext_nx, const int2 int_nx,
     for( int idx = threadIdx.x; idx < gcy1 * ext_nx.x; idx += blockDim.x ) {
         const int i = idx % ext_nx.x;
         const int j = idx / ext_nx.x;
-        local[ i + j * ext_nx.x ] += y_lower[ i + (gcy0 + int_nx.y + j) * ext_nx.x ];
+        local[ i + (gcy0 + j) * ext_nx.x ] += y_lower[ i + (gcy0 + int_nx.y + j) * ext_nx.x ];
     }
 
     // j = [0 .. gcy0[
@@ -155,7 +155,7 @@ void _add_gcy_kernel( float * buffer, const int2 ext_nx, const int2 int_nx,
     for( int idx = threadIdx.x; idx < gcy0 * ext_nx.x; idx += blockDim.x ) {
         const int i = idx % ext_nx.x;
         const int j = idx / ext_nx.x;
-        local[ i + ( int_nx.y + j ) * ext_nx.x ] += y_upper[ i + j * ext_nx.x ];
+        local[ i + ( int_nx.y - gcy0 + j ) * ext_nx.x ] += y_upper[ i + j * ext_nx.x ];
     }
 }
 

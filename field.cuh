@@ -190,7 +190,7 @@ class Field {
     }
 
     /**
-     * @brief Copies edge valies to neighboring guard cells
+     * @brief Copies edge values to neighboring guard cells
      * 
      */
     __host__

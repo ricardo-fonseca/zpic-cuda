@@ -80,11 +80,13 @@ int main() {
     float2 box = {25.6, 25.6};
     float dt = 0.07;
 
-    float tmax = 4.0;
+    Current current( gnx, tnx, box, dt );
 
     int2 ppc = {8,8};
-    float3 ufl = {1.0, 2.0, 3.0};
-    float3 uth = {0.1, 0.2, 0.3};
+    //float3 ufl = {1.0, 2.0, 3.0};
+    // float3 uth = {0.1, 0.2, 0.3};
+    float3 ufl = {1000., 1000., 1000.0};
+    float3 uth = {0};
 
     Species electrons( "electrons", -1, ppc, 1.0, 
         ufl, uth, box, gnx, tnx, dt );
@@ -93,6 +95,12 @@ int main() {
 
     electrons.save_particles();
     electrons.save_charge();
+
+    electrons.move_deposit( *current.J );
+
+    current.report(0);
+    current.report(1);
+    current.report(2);
 
     timer.stop();
 

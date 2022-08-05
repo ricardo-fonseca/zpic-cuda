@@ -25,7 +25,7 @@
 Species::Species(const std::string name, const float m_q, const int2 ppc,
         const float n0, const float3 ufl, const float3 uth,
         const float2 box, const int2 gnx, const int2 tnx, const float dt ) :
-        name{name}, m_q{m_q}, ppc{ppc}, ufl{ufl}, uth{uth}, box{box}
+        name{name}, m_q{m_q}, ppc{ppc}, ufl{ufl}, uth{uth}, box{box}, dt{dt}
 {
     std::cout << "(*info*) Initializing species " << name << " ..." << std::endl;
 
@@ -37,9 +37,6 @@ Species::Species(const std::string name, const float m_q, const int2 ppc,
     int np_max = tnx.x * tnx.y * ppc.x * ppc.y * 2;
     
     particles = new TilePart( gnx, tnx, np_max );
-
-    // Create RNG object
-    // random = 
 
     // Inject particles
     inject_particles();
@@ -79,11 +76,9 @@ void _set_uth_kernel( int2* __restrict__ d_tile, float3* __restrict__ d_u,
     const int tid = blockIdx.y * gridDim.x + blockIdx.x;
 
     // Initialize random state variables
-    uint2 state = { 
-        seed.x + tid * blockDim.x + threadIdx.x,
-        seed.y + tid * blockDim.x + threadIdx.x
-    };
-    double norm = NAN;
+    uint2 state;
+    double norm;
+    rand_init( seed, state, norm );
 
     // Set particle momenta
     const int offset = d_tile[ tid ].x;
@@ -92,9 +87,9 @@ void _set_uth_kernel( int2* __restrict__ d_tile, float3* __restrict__ d_u,
 
     for( int i = threadIdx.x; i < np; i+= blockDim.x ) {
         u[i] = make_float3(
-            ufl.x + uth.x * _rand_norm( state, norm ),
-            ufl.y + uth.y * _rand_norm( state, norm ),
-            ufl.z + uth.z * _rand_norm( state, norm )
+            ufl.x + uth.x * rand_norm( state, norm ),
+            ufl.y + uth.y * rand_norm( state, norm ),
+            ufl.z + uth.z * rand_norm( state, norm )
         );
     }
 }
@@ -449,11 +444,243 @@ void Species::advance( EMF &emf, Current &current ) {
 
 }
 
+__device__
+/**
+ * @brief Deposit (charge conserving) current for 1 segment inside a cell
+ * 
+ * @param ix        Particle cell
+ * @param x0        Initial particle position
+ * @param x1        Final particle position
+ * @param deltax    Particle motion
+ * @param qnx       Normalization values for in plane current deposition
+ * @param qvz       Out of plane current
+ * @param J         current(J) grid (should be in shared memory)
+ * @param stride    current(J) grid stride
+ */
+inline void _dep_current_seg(
+    const int2 ix, const float2 x0, const float2 x1, const float2 delta,
+    const float2 qnx, const float qvz,
+    float3 * __restrict__ J, const int stride ) {
 
-void Species::move_window() {
+    const float S0x0 = 1.0f - x0.x;
+    const float S0x1 = x0.x;
 
-    std::cerr << __func__ << " not implemented yet." << std::endl;
+    const float S1x0 = 1.0f - x1.x;
+    const float S1x1 = x1.x;
 
+    const float S0y0 = 1.0f - x0.y;
+    const float S0y1 = x0.y;
+
+    const float S1y0 = 1.0f - x1.y;
+    const float S1y1 = x1.y;
+
+    const float wl1 = qnx.x * delta.x;
+    const float wl2 = qnx.y * delta.y;
+    
+    const float wp10 = 0.5f*(S0y0 + S1y0);
+    const float wp11 = 0.5f*(S0y1 + S1y1);
+    
+    const float wp20 = 0.5f*(S0x0 + S1x0);
+    const float wp21 = 0.5f*(S0x1 + S1x1);
+    
+    atomicAdd( &J[ ix.x   + stride* ix.y   ].x, wl1 * wp10 );
+    atomicAdd( &J[ ix.x   + stride*(ix.y+1)].x, wl1 * wp11 );
+
+    atomicAdd( &J[ ix.x   + stride* ix.y   ].y, wl2 * wp20 );
+    atomicAdd( &J[ ix.x+1 + stride* ix.y   ].y, wl2 * wp21 );
+
+    atomicAdd( &J[ ix.x   + stride* ix.y   ].z, qvz * ( S0x0 * S0y0 + S1x0 * S1y0 + (S0x0 * S1y0 - S1x0 * S0y0)/2.0f ));
+    atomicAdd( &J[ ix.x+1 + stride* ix.y   ].z, qvz * ( S0x1 * S0y0 + S1x1 * S1y0 + (S0x1 * S1y0 - S1x1 * S0y0)/2.0f ));
+
+    atomicAdd( &J[ ix.x   + stride*(ix.y+1)].z, qvz * ( S0x0 * S0y1 + S1x0 * S1y1 + (S0x0 * S1y1 - S1x0 * S0y1)/2.0f ));
+    atomicAdd( &J[ ix.x+1 + stride*(ix.y+1)].z, qvz * ( S0x1 * S0y1 + S1x1 * S1y1 + (S0x1 * S1y1 - S1x1 * S0y1)/2.0f ));
+
+}
+
+__device__
+void _dep_current_split_y( const int2 ix,
+    const float2 x0, const float2 x1, const float2 dx,
+    const float2 qnx, const float qvz_2,
+    float3 * __restrict__ J, const int nrow )
+{
+
+    const int diy = ( x1.y >= 1.0f ) - ( x1.y < 0.0f );
+    if ( diy == 0 ) {
+        // No more splits
+        _dep_current_seg( ix, x0, x1, dx, qnx, qvz_2, J, nrow );
+    } else {
+        int iyb = ( diy == 1 );
+        float delta = (x1.y-iyb)/dx.y;
+        float xcross = x0.x + dx.x*(1-delta);
+
+        // First segment
+        _dep_current_seg( ix, x0, make_float2( xcross, iyb ), 
+            make_float2( dx.x * (1-delta), dx.y * (1-delta) ), 
+            qnx, qvz_2 * (1-delta), J, nrow );
+        // Second segment
+        _dep_current_seg( make_int2( ix.x, ix.y + diy), make_float2( xcross, 1.0f - iyb ),
+            make_float2( x1.x, x1.y - diy),
+            make_float2( dx.x * delta, dx.y * delta ),
+            qnx, qvz_2 * delta, J, nrow );
+    }
+}
+
+__global__
+/**
+ * @brief CUDA kernel for moving particles and depositing current
+ * 
+ * @param d_tile            Particle tiles information
+ * @param d_ix              Particle buffer (cells)
+ * @param d_x               Particle buffer (positions)
+ * @param d_u               Particle buffer (momenta)
+ * @param d_current         Electric current grid
+ * @param current_offset    Offset to position 0,0 on tile
+ * @param ext_nx            Tile size (external)
+ * @param dt_dx             Time step over cell size
+ * @param q                 Species charge per particle
+ * @param qnx               Normalization values for in plane current deposition
+ */
+void _move_deposit_kernel( int2* __restrict__ d_tile,
+    int2* __restrict__ d_ix, float2* __restrict__ d_x, float3* __restrict__ d_u,
+    float3 * __restrict__ d_current, const int current_offset, const int2 ext_nx,
+    const float2 dt_dx, const float q, const float2 qnx ) {
+    
+    extern __shared__ float3 _move_deposit_buffer[];
+    
+    // Zero current buffer
+    for( int i = threadIdx.x; i < ext_nx.x * ext_nx.y; i += blockDim.x ) {
+        _move_deposit_buffer[i].x = 0;
+        _move_deposit_buffer[i].y = 0;
+        _move_deposit_buffer[i].z = 0;
+    }
+
+    __syncthreads();
+
+    // Move particles and deposit current
+    const int tid = blockIdx.y * gridDim.x + blockIdx.x;
+
+    float3 * J = _move_deposit_buffer + current_offset;
+    const int stride = ext_nx.x;
+
+    const int part_offset = d_tile[ tid ].x;
+    const int np     = d_tile[ tid ].y;
+    int2   __restrict__ *ix  = &d_ix[ part_offset ];
+    float2 __restrict__ *x   = &d_x[ part_offset ];
+    float3 __restrict__ *u   = &d_u[ part_offset ];
+
+    for( int i = threadIdx.x; i < np; i+= blockDim.x ) {
+        float3 pu = u[i];
+        float2 x0 = x[i];
+        int2 ix0 =ix[i];
+
+        // Get 1 / Lorentz gamma
+        float rg = 1.0f / sqrtf(1.0f + pu.x*pu.x + pu.y*pu.y + pu.z*pu.z);
+
+        // Get particle motion
+        float2 deltax = {
+            dt_dx.x * rg * pu.x,
+            dt_dx.y * rg * pu.y
+        };
+
+        // Advance position
+        float2 x1 = {
+            x0.x + deltax.x,
+            x0.y + deltax.y
+        };
+
+        // Check for cell crossings
+        int2 deltaix = {
+            ((x1.x >= 1.0f) - (x1.x < 0.0f)),
+            ((x1.y >= 1.0f) - (x1.y < 0.0f))
+        };
+
+        // Deposit current
+        {
+            float qvz_2 = q * pu.z * rg * 0.5f;
+            if ( deltaix.x == 0 ) {
+                // No x splits
+                _dep_current_split_y( ix0, x0, x1, deltax, qnx, qvz_2, J, stride );
+            } else {
+                // Split x current into 2 segments
+                const int ixb = (deltaix.x == 1);
+                const float eps = ( x1.x - ixb ) / deltax.x;
+                const float ycross = x0.y + deltax.y * (1 - eps);
+
+                // First segment
+                _dep_current_split_y( ix0, x0, make_float2( 1.0f * ixb, ycross ),
+                    make_float2( deltax.x * (1-eps), deltax.y * (1-eps)), 
+                    qnx, qvz_2 * (1-eps), J, stride );
+
+                // Second segment
+
+                // Correct for y cross on first segment
+                int diycross = ( ycross >= 1.0f ) - ( ycross < 0.0f );
+                
+                _dep_current_split_y( make_int2( ix0.x + deltaix.x, ix0.y + diycross) , 
+                    make_float2( 1.0f - ixb, ycross - diycross),
+                    make_float2( x1.x - deltaix.x, x1.y - diycross ), 
+                    make_float2( deltax.x * eps, deltax.y * eps),
+                    qnx, qvz_2 * eps, J, stride );
+            }
+        }
+
+        // Correct position and store
+        x1.x -= deltaix.x;
+        x1.y -= deltaix.y;
+        x[i] = x1;
+
+        // Modify cell and store
+        int2 ix1 = {
+            ix0.x + deltaix.x,
+            ix0.y + deltaix.y
+        };
+        ix[i] = ix1;
+    }
+
+    __syncthreads();
+
+    // Copy current to global buffer
+    const int tile_off = ((blockIdx.y * gridDim.x) + blockIdx.x) * ext_nx.x * ext_nx.y;
+    for( int i = threadIdx.x; i < ext_nx.x * ext_nx.y; i += blockDim.x ) {
+        d_current[tile_off + i] = _move_deposit_buffer[i];
+    }
+
+}
+
+__host__
+/**
+ * @brief Moves particles using current value of u and deposits current
+ * 
+ * Note that current grid will be zeroed before deposition
+ * 
+ * @param current   Current grid
+ */
+void Species::move_deposit( VFLD &current ) {
+
+    const float2 dt_dx = {
+        dt / dx.x,
+        dt / dx.y
+    };
+
+    const float2 qnx = {
+        q * dx.x / dt,
+        q * dx.y / dt
+    };
+
+    dim3 grid( particles->nxtiles.x, particles->nxtiles.y );
+    dim3 block( 64 );
+    int2 ext_nx = current.ext_nx();
+    size_t shm_size = ext_nx.x * ext_nx.y * sizeof(float3);
+
+    _move_deposit_kernel <<< grid, block, shm_size >>> ( 
+        particles -> d_tile, 
+        particles -> d_ix, particles -> d_x, particles -> d_u,
+        current.d_buffer, current.offset(), ext_nx, dt_dx, q, qnx
+    );
+
+    current.add_from_gc();
+
+    d_iter++;
 }
 
 /**
@@ -472,16 +699,27 @@ void Species::deposit_phasespace( const int rep_type, const int2 pha_nx, const f
 }
 
 __global__
-void _dep_charge_kernel( float* __restrict__ d_charge, int offset, int2 int_nx, int2 ext_nx,
+/**
+ * @brief CUDA kernel for depositing charge
+ * 
+ * @param d_charge  Charge density grid (will be zeroed by this kernel)
+ * @param offset    Offset to position (0,0) of grid
+ * @param ext_nx    External tile size (i.e. including guard cells)
+ * @param d_tile    Particle tiles information
+ * @param d_ix      Particle buffer (cells)
+ * @param d_x       Particle buffer (position)
+ * @param q         Species charge per particle
+ */
+void _dep_charge_kernel( float* __restrict__ d_charge, int offset, int2 ext_nx,
     int2* __restrict__ d_tile, int2* __restrict__ d_ix, float2* __restrict__ d_x, const float q ) {
 
-    extern __shared__ float buffer[];
+    extern __shared__ float _dep_charge_buffer[];
 
     // Zero shared memory and sync.
     for( int i = threadIdx.x; i < ext_nx.x * ext_nx.y; i += blockDim.x ) {
-        buffer[i] = 0;
+        _dep_charge_buffer[i] = 0;
     }
-    float *charge = &buffer[ offset ];
+    float *charge = &_dep_charge_buffer[ offset ];
 
     __syncthreads();
 
@@ -490,17 +728,17 @@ void _dep_charge_kernel( float* __restrict__ d_charge, int offset, int2 int_nx, 
     const int np = d_tile[ tid ].y;
     int2   __restrict__ *ix = &d_ix[ part_off ];
     float2 __restrict__ *x  = &d_x[ part_off ];
-    const int nrow = ext_nx.x;
+    const int ystride = ext_nx.x;
 
     for( int i = threadIdx.x; i < np; i += blockDim.x ) {
-        const int idx = ix[i].y * nrow + ix[i].x;
+        const int idx = ix[i].y * ystride + ix[i].x;
         const float w1 = x[i].x;
         const float w2 = x[i].y;
 
-        atomicAdd( &charge[ idx            ], ( 1.0f - w1 ) * ( 1.0f - w2 ) * q );
-        atomicAdd( &charge[ idx + 1        ], (        w1 ) * ( 1.0f - w2 ) * q );
-        atomicAdd( &charge[ idx     + nrow ], ( 1.0f - w1 ) * (        w2 ) * q );
-        atomicAdd( &charge[ idx + 1 + nrow ], (        w1 ) * (        w2 ) * q );
+        atomicAdd( &charge[ idx               ], ( 1.0f - w1 ) * ( 1.0f - w2 ) * q );
+        atomicAdd( &charge[ idx + 1           ], (        w1 ) * ( 1.0f - w2 ) * q );
+        atomicAdd( &charge[ idx     + ystride ], ( 1.0f - w1 ) * (        w2 ) * q );
+        atomicAdd( &charge[ idx + 1 + ystride ], (        w1 ) * (        w2 ) * q );
     }
 
     __syncthreads();
@@ -508,16 +746,15 @@ void _dep_charge_kernel( float* __restrict__ d_charge, int offset, int2 int_nx, 
     // Copy data to global memory
     const int tile_off = tid * ext_nx.x * ext_nx.y;
     for( int i = threadIdx.x; i < ext_nx.x * ext_nx.y; i += blockDim.x ) {
-        d_charge[tile_off + i] = buffer[i];
+        d_charge[tile_off + i] = _dep_charge_buffer[i];
     } 
-
 }
 
 __host__
 /**
  * @brief Deposit charge density
  * 
- * @param charge 
+ * @param charge    Charge density grid
  */
 void Species::deposit_charge( Field &charge ) {
 
@@ -528,7 +765,7 @@ void Species::deposit_charge( Field &charge ) {
     size_t shm_size = ext_nx.x * ext_nx.y * sizeof(float);
 
     _dep_charge_kernel <<< grid, block, shm_size >>> (
-        charge.d_buffer, charge.offset(), charge.nx, ext_nx,
+        charge.d_buffer, charge.offset(), ext_nx,
         particles -> d_tile, particles -> d_ix, particles -> d_x, q
     );
 
@@ -614,6 +851,8 @@ void Species::save_charge() {
 
     const int2 gnx = particles -> g_nx();
     const int2 nx = particles -> nx;
+
+    // For linear interpolation we only require 1 guard cell at the upper boundary
     const int2 gc[2] = {
         {0,0},
         {1,1}

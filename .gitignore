@@ -13,6 +13,7 @@ zpic-cuda
 
 # Output directories
 CHARGE/
+CURRENT/
 EMF/
 PARTICLES/
 

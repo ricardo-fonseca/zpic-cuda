@@ -2,10 +2,43 @@
 #define __RANDOM__
 
 #include "math.h"
+#include <cmath>
+
+// Check if unsignd int has the proper size
+#if ( __SIZEOF_INT__ != 4 )
+#error RANDOM module only works if `unsigned int` is 32 bits
+#endif
 
 namespace {
 
-__device__
+inline __host__ __device__
+/**
+ * @brief Initializes PRNG state
+ * 
+ * The CUDA version will assign a different state to every thread
+ * assuming a 2D grid and a 1D block. This can (should) be made more
+ * general.
+ * 
+ * @param seed 
+ * @param state 
+ * @param norm 
+ */
+void rand_init( const uint2 seed, uint2 & state, double & norm ) {
+
+#ifdef __CUDA__ARCH__
+    const int tid = blockIdx.y * gridDim.x + blockIdx.x;
+    state = make_uint2( 
+        seed.x + tid * blockDim.x + threadIdx.x,
+        seed.y + tid * blockDim.x + threadIdx.x
+    );
+#else
+    state = seed;
+#endif
+
+    norm = NAN;
+}
+
+inline __host__ __device__
 /**
  * @brief Returns a 32 bit pseudo random number using Marsaglia MWC algorithm
  * 
@@ -25,14 +58,49 @@ __device__
  *                  this call.
  * @return Random value in the range [0,2^32 - 1]
  */
-unsigned int _rand_uint32( uint2 & state ) {
+unsigned int rand_uint32( uint2 & state ) {
     state.x = 36969 * (state.x & 65535) + (state.x >> 16);
     state.y = 18000 * (state.y & 65535) + (state.y >> 16);
     return (state.x << 16) + state.y;  /* 32-bit result */
 }
 
+inline __host__ __device__
+/**
+ * @brief Returns a random number on [0,1]-real-interval (32 bit resolution)
+ * 
+ * @param state     Previous state of the of the PRNG, will be modified by
+ *                  this call.
+ * @return double   Random value in the range [0,1]
+ */
+double rand_real1( uint2 & state ) {
+    return rand_uint32( state ) * 0x1.00000001p-32;
+}
 
-__device__
+inline __host__ __device__
+/**
+ * @brief Returns a random number on [0,1)-real-interval (32 bit resolution)
+ * 
+ * @param state     Previous state of the of the PRNG, will be modified by
+ *                  this call.
+ * @return double   Random value in the range [0,1)
+ */
+double rand_real2( uint2 & state ) {
+    return rand_uint32( state ) * 0x1.00000000fffffp-32;
+}
+
+inline __host__ __device__
+/**
+ * @brief Returns a random number on (0,1)-real-interval (32 bit resolution)
+ * 
+ * @param state     Previous state of the of the PRNG, will be modified by
+ *                  this call.
+ * @return double   Random value in the range (0,1)
+ */
+double rand_real3( uint2 & state ) {
+    return ( rand_uint32( state ) + 1.0 ) * 0x1.fffffffep-33;
+}
+
+inline __host__ __device__
 /**
  * @brief Returns a variate of the normal distribution (mean 0, stdev 1)
  * 
@@ -51,13 +119,13 @@ __device__
  * 
  * @return Double precision random number following a normal distribution 
  */
-double _rand_norm( uint2 & state, double & norm ) {
+double rand_norm( uint2 & state, double & norm ) {
     double res;
     if ( std::isnan( norm ) ) {
         double v1, v2, rsq, fac;
         do {
-            v1 = ( _rand_uint32( state ) + 0.5 ) / 2147483649.0 - 1.0;
-            v2 = ( _rand_uint32( state ) + 0.5 ) / 2147483649.0 - 1.0;
+            v1 = rand_real3( state ) * 2.0 - 1.0;
+            v2 = rand_real3( state ) * 2.0 - 1.0;
 
             // check if they are inside the unit circle, and not (0,0)
             // otherwise try again

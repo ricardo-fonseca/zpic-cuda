@@ -12,12 +12,11 @@ __host__
  * @param box_  Simulation box dimensions
  * @param dt_   Time step size
  */
-Current::Current(const int2 gnx, const int2 tnx, const float2 box_, const float dt_ ) {
+Current::Current(const int2 gnx, const int2 tnx, const float2 box, const float dt ) :
+    box{box}, dt{dt} {
 
     std::cout << "(*info*) Initialize current..." << std::endl;
 
-    box = box_;
-    dt = dt_;
     dx.x = box.x / gnx.x;
     dx.y = box.y / gnx.y;
 
@@ -152,12 +151,11 @@ void Current::report( const int jc ) {
     info.count[0] = J -> nxtiles.x * J -> nx.x;
     info.count[1] = J -> nxtiles.y * J -> nx.y;
 
-
     t_zdf_iteration iter = {
     	.n = d_iter,
     	.t = d_iter * dt,
     	.time_units = (char *) "1/\\omega_p"
     };
 
-    zdf_save_tile_vfld( *J, jc, &info, &iter, "CURRENT" );
+    J -> save( jc, info, iter, "CURRENT" );
 }

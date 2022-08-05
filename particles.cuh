@@ -63,7 +63,7 @@ class Species {
     void advance( EMF &emf, Current &current );
 
     __host__
-    void move_window();
+    void move_deposit( VFLD &current );
 
     __host__
     void deposit_charge( Field &charge );

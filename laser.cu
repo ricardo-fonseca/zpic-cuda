@@ -185,8 +185,8 @@ int Laser::launch( VFLD& E, VFLD& B, float2 box ) {
         E.nx, ext_nx, dx
     );
 
-    E.update_gc();
-    B.update_gc();
+    E.copy_to_gc();
+    B.copy_to_gc();
 
     return 0;
 }
@@ -512,8 +512,8 @@ void div_corr_x(VFLD& E, VFLD& B, float2 dx ) {
     }
 
     // Correct longitudinal values on guard cells
-    E.update_gc();
-    B.update_gc();
+    E.copy_to_gc();
+    B.copy_to_gc();
 }
 
 
@@ -554,8 +554,8 @@ int Gaussian::launch(VFLD& E, VFLD& B, float2 box ) {
         E.nx, ext_nx, dx
     );
 
-    E.update_gc();
-    B.update_gc();
+    E.copy_to_gc();
+    B.copy_to_gc();
 
     div_corr_x( E, B, dx );
 

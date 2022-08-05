@@ -1,5 +1,25 @@
 # ZPIC CUDA Development
 
+## 2022.8.5
+
+* Implements particle move_deposit
+  * Fully relativistic leap-frog implementation complete
+  * Acceleration (du_dt) will be implemented in a separate kernel to save on shared memory
+  * Initial implementation of current deposit equal to OpenACC version
+    * Am convinced that trajectory splitting (aka virtual particles), with virtual particles stored in shared memory is the way to go
+* Improvements on the random module
+  * Enables use on host code
+  * Adds real1, real2 and real3 flavours
+  * Adds state initializer. On `__device__` code this ensures a different state for each thread
+* Adds copy_to_gc() and add_from_gc() methods to VFLD
+  * Removes the old update_gc() method
+  * Also fixed a bug on Field::add_from_gc()
+* Fixes initializers for Current, EMF and Species objects
+* Adds VFLD::save() method
+  * Removes the old zdf_save_tile_vfld() routine
+* Adds histogram plots and several plot options for all visXD notebook routines
+* Adds code documentation in several places
+
 ## 2022.8.4
 
 * Improves particle initialization
