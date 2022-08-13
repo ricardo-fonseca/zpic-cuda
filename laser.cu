@@ -2,6 +2,9 @@
 #include <iostream>
 #include <cassert>
 
+#include <cooperative_groups.h>
+namespace cg=cooperative_groups;
+
 __host__
 /**
  * @brief Construct a new Laser:: Laser object
@@ -98,7 +101,7 @@ float lon_env( Laser& laser, float z ) {
 /**
  * @brief CUDA kernel for launching a plane wave
  * 
- * Kernel must be launched with a grid [nxtiles.x,nxtiles.y] and block [nthreads]
+ * Kernel must be launched with a grid [ntiles.x,ntiles.y] and block [nthreads]
  * 
  * @param laser     Laser parameters
  * @param E         Pointer to E field data including offset
@@ -108,9 +111,10 @@ float lon_env( Laser& laser, float z ) {
  * @param dx        Cell size
  */
 __global__
-void _plane_wave_kernel( Laser laser, float3 * __restrict__ E, float3 * __restrict__ B,
-    int2 int_nx, int2 ext_nx, float2 dx ) {
-
+void _plane_wave_kernel( Laser laser, 
+    float3 * __restrict__ E, float3 * __restrict__ B,
+    uint2 int_nx, uint2 ext_nx, float2 const dx )
+{
     int    tile_id  = blockIdx.y * gridDim.x + blockIdx.x;
     size_t tile_off = tile_id * ext_nx.x * ext_nx.y;
 
@@ -167,17 +171,17 @@ int Laser::launch( VFLD& E, VFLD& B, float2 box ) {
         sin_pol = sin( polarization );
     }
 
-    int2 g_nx = E.g_nx();
-    float2 dx = {
-        .x = box.x / g_nx.x,
-        .y = box.y / g_nx.y
-    };
+    uint2 g_nx = E.g_nx();
+    float2 dx = make_float2(
+        box.x / g_nx.x,
+        box.y / g_nx.y
+    );
 
-    int2 ext_nx = E.ext_nx();
-    int offset = E.offset();
+    uint2 ext_nx = E.ext_nx();
+    unsigned int offset = E.offset();
 
     dim3 block( 64 );
-    dim3 grid( E.nxtiles.x, E.nxtiles.y );
+    dim3 grid( E.ntiles.x, E.ntiles.y );
 
 
     _plane_wave_kernel <<< grid, block >>> ( *this,
@@ -238,7 +242,7 @@ float gauss_phase( const float omega0, const float W0, const float z, const floa
 /**
  * @brief Launch transverse components of Gaussian beam
  *
- * Kernel must be launched with a grid [nxtiles.x,nxtiles.y] and block [nthreads]
+ * Kernel must be launched with a grid [ntiles.x,ntiles.y] and block [nthreads]
  * 
  * @param beam      Gaussian beam parameters
  * @param E         Electric field
@@ -248,9 +252,10 @@ float gauss_phase( const float omega0, const float W0, const float z, const floa
  * @param dx        Cell size
  */
 __global__
-void _gaussian_kernel( Gaussian beam, float3 * __restrict__ E, float3 * __restrict__ B,
-    int2 int_nx, int2 ext_nx, float2 dx ) {
-
+void _gaussian_kernel( Gaussian beam, 
+    float3 * const __restrict__ E, float3 * const __restrict__ B,
+    uint2 int_nx, uint2 ext_nx, float2 const dx )
+{
     int    tile_id  = blockIdx.y * gridDim.x + blockIdx.x;
     size_t tile_off = tile_id * ext_nx.x * ext_nx.y;
 
@@ -291,7 +296,7 @@ void _gaussian_kernel( Gaussian beam, float3 * __restrict__ E, float3 * __restri
  * @brief CUDA kernel for div_corr_x, step A
  * 
  * Get per-tile E and B divergence at left edge starting from 0
- * Kernel must be launched with a grid [nxtiles.x,nxtiles.y] and block [nthreads]
+ * Kernel must be launched with a grid [ntiles.x,ntiles.y] and block [nthreads]
  * It also required dynamic shared memory buffer for 2 tiles
  * 
  * Parallelization:
@@ -299,9 +304,13 @@ void _gaussian_kernel( Gaussian beam, float3 * __restrict__ E, float3 * __restri
  * - Use 1 thread per line for divergence calculation.
  */
 __global__
-void _div_corr_x_kernel_A( float3 * __restrict__ d_E, float3 * __restrict__ d_B,
-    int2 int_nx, int2 ext_nx, int offset,
-    float2 dx, double2 * __restrict__ tmp ) {
+void _div_corr_x_kernel_A( 
+    float3 * const __restrict__ d_E, 
+    float3 * const __restrict__ d_B,
+    uint2 const int_nx, uint2 const ext_nx, unsigned int const offset,
+    float2 dx, double2 * const __restrict__ tmp )
+{
+    auto group = cg::this_thread_block();
 
     extern __shared__ float3 buffer[];
     
@@ -313,14 +322,14 @@ void _div_corr_x_kernel_A( float3 * __restrict__ d_E, float3 * __restrict__ d_B,
         buffer[i        ] = d_E[tile_off + i];
         buffer[B_off + i] = d_B[tile_off + i];
     }
-    __syncthreads();
+    group.sync();
 
-    float3* E = buffer + offset;
-    float3* B = E + B_off; 
+    float3 * const __restrict__ E = buffer + offset;
+    float3 * const __restrict__ B = E + B_off; 
 
     // Process 
     const double dx_dy = (double) dx.x / (double) dx.y;
-    const int tmp_off = blockIdx.y * int_nx.y * gridDim.x;
+    const unsigned int tmp_off = blockIdx.y * int_nx.y * gridDim.x;
 
     for( int iy = threadIdx.x; iy < int_nx.y; iy += blockDim.x ) {
         
@@ -344,25 +353,26 @@ void _div_corr_x_kernel_A( float3 * __restrict__ d_E, float3 * __restrict__ d_B,
  * Must be called with a grid [ gnx.y ] and block [ nthreads ]
  * 
  * @param tmp       Temporary array holding results from step B
- * @param nxtiles   Global tile configuration
+ * @param ntiles   Global tile configuration
  */
 __global__
-void _div_corr_x_kernel_B( double2 * tmp, int2 nxtiles ) {
-
+void _div_corr_x_kernel_B( double2 * const __restrict__ tmp, uint2 ntiles )
+{
+    auto group = cg::this_thread_block();
     extern __shared__ double2 buffer_B[];
 
     int giy = blockIdx.x;
 
     // Copy data into shared memory and sync
-    for( int i = threadIdx.x; i < nxtiles.x; i += blockDim.x ) {
-        buffer_B[i] = tmp[ giy * nxtiles.x + i ];
+    for( int i = threadIdx.x; i < ntiles.x; i += blockDim.x ) {
+        buffer_B[i] = tmp[ giy * ntiles.x + i ];
     }
-    __syncthreads();
+    group.sync();
 
     // Perform scan operation (serial inside block)
     if ( threadIdx.x == 0 ) {
         double2 a = make_double2(0,0);
-        for( int i = nxtiles.x-1; i >= 0; i--) {
+        for( int i = ntiles.x-1; i >= 0; i--) {
             double2 b = buffer_B[i];
             buffer_B[i] = a;
             a.x += b.x;
@@ -371,8 +381,8 @@ void _div_corr_x_kernel_B( double2 * tmp, int2 nxtiles ) {
     }
 
     // Copy data to global memory
-    for( int i = threadIdx.x; i < nxtiles.x; i += blockDim.x ) {
-        tmp[ giy * nxtiles.x + i ] = buffer_B[i];
+    for( int i = threadIdx.x; i < ntiles.x; i += blockDim.x ) {
+        tmp[ giy * ntiles.x + i ] = buffer_B[i];
     }
 }
 
@@ -389,10 +399,14 @@ void _div_corr_x_kernel_B( double2 * tmp, int2 nxtiles ) {
  * @param tmp 
  */
 __global__
-void _div_corr_x_kernel_C( float3 * __restrict__ d_E, float3 * __restrict__ d_B,
-    int2 int_nx, int2 ext_nx, int offset,
-    float2 dx, double2 * __restrict__ tmp ) {
-
+void _div_corr_x_kernel_C( 
+    float3 * const __restrict__ d_E,
+    float3 * const __restrict__ d_B,
+    uint2 const int_nx, uint2 const ext_nx, unsigned int const offset,
+    float2 const dx, double2 const * const __restrict__ tmp )
+{
+    auto group = cg::this_thread_block();
+    
     extern __shared__ float3 buffer[];
     
     const int tile_off = ((blockIdx.y * gridDim.x) + blockIdx.x) * ext_nx.x * ext_nx.y;
@@ -403,14 +417,14 @@ void _div_corr_x_kernel_C( float3 * __restrict__ d_E, float3 * __restrict__ d_B,
         buffer[i] = d_E[tile_off + i];
         buffer[B_off + i] = d_B[tile_off + i];
     }
-    __syncthreads();
+    group.sync();
 
-    float3* E = buffer + offset;
-    float3* B = E + B_off; 
+    float3 * const __restrict__ E = buffer + offset;
+    float3 * const __restrict__ B = E + B_off; 
 
     // Process 
-    const double dx_dy = (double) dx.x / (double) dx.y;
-    const int tmp_off = blockIdx.y * int_nx.y * gridDim.x;
+    double const dx_dy = (double) dx.x / (double) dx.y;
+    unsigned int const tmp_off = blockIdx.y * int_nx.y * gridDim.x;
 
     for( int iy = threadIdx.x; iy < int_nx.y; iy += blockDim.x ) {
         
@@ -428,7 +442,7 @@ void _div_corr_x_kernel_C( float3 * __restrict__ d_E, float3 * __restrict__ d_B,
             B[ ix + iy * ext_nx.x].x = divBx;
         }
     }
-    __syncthreads();
+    group.sync();
 
     // Copy data to device memory
     for( int i = threadIdx.x; i < ext_nx.x * ext_nx.y; i += blockDim.x ) {
@@ -447,25 +461,24 @@ void _div_corr_x_kernel_C( float3 * __restrict__ d_E, float3 * __restrict__ d_B,
  * @param B 
  * @param dx 
  */
-void div_corr_x(VFLD& E, VFLD& B, float2 dx ) {
-
-    cudaError_t err;
+void div_corr_x(VFLD& E, VFLD& B, float2 const dx )
+{
 
     // A. Get accumulated E and B x divergence at the left edge of each
     //    tile (starting at 0 on right edge)
     double2* tmp;
-    size_t bsize = E.nxtiles.x * (E.nxtiles.y * E.nx.y) * sizeof( double2 );
-    err = cudaMalloc( &tmp, bsize );
+    size_t bsize = E.ntiles.x * (E.ntiles.y * E.nx.y) * sizeof( double2 );
+    auto err = cudaMalloc( &tmp, bsize );
     if ( err != cudaSuccess ) {
         std::cerr << "(*error*) Unable to allocate device memory for div_corr_x." << std::endl;
         std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
         return;
     }
 
-    int2 ext_nx = E.ext_nx();
-    int offset = E.offset();
+    uint2 const ext_nx = E.ext_nx();
+    unsigned int const offset = E.offset();
 
-    dim3 grid( E.nxtiles.x, E.nxtiles.y );
+    dim3 grid( E.ntiles.x, E.ntiles.y );
     dim3 block( 32 );
     size_t shm_size = E.ext_vol() * 2 * sizeof(float3);
     
@@ -483,9 +496,9 @@ void div_corr_x(VFLD& E, VFLD& B, float2 dx ) {
     );
 
     // B. Left-scan the divergences
-    dim3 grid_B( E.nxtiles.y * E.nx.y );
-    dim3 block_B( E.nxtiles.x > 32 ? 32 : E.nxtiles.x );
-    size_t shm_size_B = E.nxtiles.x * sizeof(double2);
+    dim3 grid_B( E.ntiles.y * E.nx.y );
+    dim3 block_B( E.ntiles.x > 32 ? 32 : E.ntiles.x );
+    size_t shm_size_B = E.ntiles.x * sizeof(double2);
 
     if ( shm_size_B >= 49152 ) {
         std::cerr << "(*error*) Unable to correct divergence, too much shared memory required (shm_size_B)" << std::endl;
@@ -494,7 +507,7 @@ void div_corr_x(VFLD& E, VFLD& B, float2 dx ) {
     }
 
     _div_corr_x_kernel_B <<< grid_B, block_B, shm_size_B >>> (
-        tmp, E.nxtiles
+        tmp, E.ntiles
     );
 
     // C. Set longitudinal field values
@@ -528,7 +541,7 @@ void div_corr_x(VFLD& E, VFLD& B, float2 dx ) {
  * @return      Returns 0 on success, -1 on error (invalid laser parameters)
  */
 __host__
-int Gaussian::launch(VFLD& E, VFLD& B, float2 box ) {
+int Gaussian::launch(VFLD& E, VFLD& B, float2 const box ) {
 
     if ( validate() < 0 ) return -1;
 
@@ -542,10 +555,10 @@ int Gaussian::launch(VFLD& E, VFLD& B, float2 box ) {
         .y = box.y / E.g_nx().y
     };
 
-    int2 ext_nx = E.ext_nx();
-    int offset  = E.offset();
+    uint2 const ext_nx = E.ext_nx();
+    unsigned int const offset  = E.offset();
 
-    dim3 grid( E.nxtiles.x, E.nxtiles.y );
+    dim3 grid( E.ntiles.x, E.ntiles.y );
     dim3 block( 64 );
 
     _gaussian_kernel <<< grid, block >>> ( 

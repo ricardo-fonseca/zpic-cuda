@@ -12,19 +12,28 @@ __host__
  * @param box_  Simulation box dimensions
  * @param dt_   Time step size
  */
-Current::Current(const int2 gnx, const int2 tnx, const float2 box, const float dt ) :
-    box{box}, dt{dt} {
 
+/**
+ * @brief Construct a new Current:: Current object
+ * 
+ * @param ntiles    Number of tiles
+ * @param nx        Tile grid size
+ * @param box       Box size
+ * @param dt        Time step
+ */
+Current::Current( uint2 const ntiles, uint2 const nx, float2 const box,
+    float const dt ) : box{box}, dt{dt}
+{
     std::cout << "(*info*) Initialize current..." << std::endl;
 
-    dx.x = box.x / gnx.x;
-    dx.y = box.y / gnx.y;
+    dx.x = box.x / ( nx.x * ntiles.x );
+    dx.y = box.y / ( nx.y * ntiles.y );
 
     // Guard cells (1 below, 2 above)
     // These are required for the Yee solver AND for field interpolation
-    int2 gc[2] = {{1,1},{2,2}}; 
+    uint2 gc[2] = { make_uint2(1,1), make_uint2(2,2)}; 
 
-    J = new VFLD( gnx, tnx, gc );
+    J = new VFLD( ntiles, nx, gc );
 
     // Zero initial current
     // This is only relevant for diagnostics, current is always zeroed before deposition
@@ -32,7 +41,7 @@ Current::Current(const int2 gnx, const int2 tnx, const float2 box, const float d
     J -> zero();
 
     // Reset iteration number
-    d_iter = h_iter = 0;
+    iter = 0;
 
     std::cout << "(*info*) Initialize current done!" << std::endl;
 }
@@ -42,37 +51,10 @@ __host__
  * @brief Destroy the Current:: Current object
  * 
  */
-Current::~Current() {
-    
+Current::~Current()
+{   
     std::cout << "(*info*) Cleanup current..." << std::endl;
-
     delete (J);
-
-    d_iter = h_iter = -1;
-}
-
-__host__
-/**
- * @brief Updates host/device data from device/host data
- * 
- * It will also set the iteration numbers accordingly
- * 
- * @param direction     host_device or device_host
- */
-void Current::update_data( const VFLD::copy_direction direction ) {
-
-    J -> update_data( direction );
-
-    switch( direction ) {
-    case VFLD::host_device:  // Host to device
-        d_iter = h_iter;
-       break;
-    case VFLD::device_host: // Device to host
-        h_iter = d_iter;
-        break;
-    default:
-        std::cerr << "(*error*) Invalid direction in EMF::update() call." << std::endl;
-    }
 }
 
 __host__
@@ -85,12 +67,12 @@ __host__
 void Current::advance() {
 
     // Add up current deposited on guard cells
-    //J -> update_add_gc();
+    J -> add_from_gc();
 
     // Apply filtering
     // filter -> apply( *J );
 
-    d_iter++;
+    iter++;
 }
 
 __host__
@@ -148,14 +130,14 @@ void Current::report( const int jc ) {
     	.axis = axis
     };
 
-    info.count[0] = J -> nxtiles.x * J -> nx.x;
-    info.count[1] = J -> nxtiles.y * J -> nx.y;
+    info.count[0] = J -> ntiles.x * J -> nx.x;
+    info.count[1] = J -> ntiles.y * J -> nx.y;
 
-    t_zdf_iteration iter = {
-    	.n = d_iter,
-    	.t = d_iter * dt,
+    t_zdf_iteration iteration = {
+    	.n = iter,
+    	.t = iter * dt,
     	.time_units = (char *) "1/\\omega_p"
     };
 
-    J -> save( jc, info, iter, "CURRENT" );
+    J -> save( jc, info, iteration, "CURRENT" );
 }

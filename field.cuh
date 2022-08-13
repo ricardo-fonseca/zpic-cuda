@@ -13,12 +13,11 @@ class Field {
     
     public:
 
-    float *h_buffer;
     float *d_buffer;
 
-    int2 nx;            // Tile grid size
-    int2 gc[2];         // Tile guard cells
-    int2 nxtiles;       // Number of tiles in each direction
+    uint2 nx;            // Tile grid size
+    uint2 gc[2];         // Tile guard cells
+    uint2 ntiles;       // Number of tiles in each direction
 
     /**
      * @brief Class Field (float grid) constructor.
@@ -29,7 +28,9 @@ class Field {
      * @param tnx       Tile dimensions
      * @param gc        Number of guard cells
      */
-    __host__ Field( const int2 gnx_, const int2 tnx_, const int2 gc_[2]);
+    __host__ Field( uint2 const ntiles, uint2 const nx, uint2 const gc[2]);
+
+    __host__ Field( uint2 const ntiles, uint2 const nx );
 
     /**
      * @brief Field destructor
@@ -50,16 +51,13 @@ class Field {
 
         size_t size = buffer_size( ) * sizeof(float);
 
-        // zero GPU data
+        // zero device data
         cudaError_t err = cudaMemset( d_buffer, 0, size );
         if ( err != cudaSuccess ) {
             std::cerr << "(*error*) Unable to zero device memory for tiled grid." << std::endl;
             std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
             return -1;
         }
-
-        // zero CPU data
-        memset( h_buffer, 0, size );
 
         return 0;
     };
@@ -69,37 +67,12 @@ class Field {
      * 
      * @param val       Type float value
      */
-    __host__ void set( const float val );
+    __host__ void set( float const val );
 
-    enum copy_direction { host_device, device_host };
-    
-    /**
-     * @brief   Updates device/host data from host/device
-     * 
-     * @param direction     Copy direction ( host_device | device_host )
-     * @return int          Returns 0 on success, -1 on error
-     */
-    __host__ int update_data( const copy_direction direction ) {
-        cudaError_t err;
-        size_t size = buffer_size( ) * sizeof(float);
-
-        switch( direction ) {
-            case host_device:  // Host to device
-                err = cudaMemcpy( d_buffer, h_buffer, size, cudaMemcpyHostToDevice );
-                break;
-            case device_host: // Device to host
-                err = cudaMemcpy( h_buffer, d_buffer, size, cudaMemcpyDeviceToHost );
-                break;
-        }
-
-        if ( err != cudaSuccess ) {
-            std::cerr << "(*error*) Unable copy data in Field_update()." << std::endl;
-            std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
-            return -1;
-        }
-
-        return 0;
-    };
+    __host__ float operator=( float const val ) {
+        set( val );
+        return val;
+    }
 
     /**
      * @brief Gather field component values from all tiles into a contiguous grid
@@ -139,7 +112,7 @@ class Field {
      */
     __host__
     std::size_t buffer_size() {
-        return nxtiles.x * nxtiles.y * tile_size();
+        return ntiles.x * ntiles.y * tile_size();
     };
 
     /**
@@ -148,10 +121,10 @@ class Field {
      * @return int2 
      */
     __host__
-    int2 g_nx() {
-        return make_int2 (
-            nxtiles.x * nx.x,
-            nxtiles.y * nx.y
+    uint2 g_nx() {
+        return make_uint2 (
+            ntiles.x * nx.x,
+            ntiles.y * nx.y
         );
     };
 
@@ -161,8 +134,8 @@ class Field {
      * @return      int2 value specifying external size of tile 
      */
     __host__
-    int2 ext_nx() {
-        return make_int2(
+    uint2 ext_nx() {
+        return make_uint2(
            gc[0].x +  nx.x + gc[1].x,
            gc[0].y +  nx.y + gc[1].y
         );
@@ -185,7 +158,7 @@ class Field {
      * @return      Offset in cells 
      */
     __host__
-    int offset() {
+    unsigned int offset() {
         return gc[0].y * (gc[0].x +  nx.x + gc[1].x) + gc[0].x;
     }
 

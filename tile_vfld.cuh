@@ -15,22 +15,24 @@ class VFLD {
 
     public:
 
-    enum copy_direction { host_device, device_host };
-
-    float3 *buffer;     // Data buffer (host)
     float3 *d_buffer;   // Data buffer (device)
 
-    int2 nx;            // Tile grid size
-    int2 gc[2];         // Tile guard cells
-    int2 nxtiles;       // Number of tiles in each direction
+    uint2 ntiles;       // Number of tiles in each direction
+    uint2 nx;            // Tile grid size
+    uint2 gc[2];         // Tile guard cells
 
-    __host__ VFLD( const int2 gnx, const int2 tnx, const int2 gc[2]);
+    __host__ VFLD( uint2 const ntiles, uint2 const nx, uint2 const gc[2]);
+    __host__ VFLD( uint2 const ntiles, uint2 const nx );
     __host__ ~VFLD();
 
     __host__ int zero();
-    __host__ void set( const float3 val );
-    __host__ int update_data( const copy_direction direction );
 
+    __host__ void set( float3 const val );
+
+    __host__ float3 operator=( float3 const val ) { 
+        set(val);
+        return val;
+    }
     __host__ void add( const VFLD &rhs );
 
     __host__ int gather( const int fc, float * data );
@@ -52,7 +54,7 @@ class VFLD {
      */
     __host__
     std::size_t buffer_size() {
-        return nxtiles.x * nxtiles.y * tile_size();
+        return ntiles.x * ntiles.y * tile_size();
     };
 
     /**
@@ -61,10 +63,10 @@ class VFLD {
      * @return int2 
      */
     __host__
-    int2 g_nx() {
-        return make_int2 (
-            nxtiles.x * nx.x,
-            nxtiles.y * nx.y
+    uint2 g_nx() {
+        return make_uint2 (
+            ntiles.x * nx.x,
+            ntiles.y * nx.y
         );
     };
 
@@ -74,8 +76,8 @@ class VFLD {
      * @return      int2 value specifying external size of tile 
      */
     __host__
-    int2 ext_nx() {
-        return make_int2(
+    uint2 ext_nx() {
+        return make_uint2(
            gc[0].x +  nx.x + gc[1].x,
            gc[0].y +  nx.y + gc[1].y
         );
@@ -98,7 +100,7 @@ class VFLD {
      * @return      Offset in cells 
      */
     __host__
-    int offset() {
+    unsigned int offset() {
         return gc[0].y * (gc[0].x +  nx.x + gc[1].x) + gc[0].x;
     }
 

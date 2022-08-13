@@ -46,8 +46,10 @@ void _add_kernel( float * __restrict__ a, float * __restrict__ b, size_t size ) 
  * @param ext_nx    External dimensions of tile
  */
 __global__
-void _gather_kernel( float * __restrict__ out, float * __restrict__ in,
-    int2 const gnx, int2 const int_nx, int2 const ext_nx ) {
+void _field_gather_kernel( 
+    float * const __restrict__ out, 
+    float const * const __restrict__ in,
+    uint2 const gnx, uint2 const int_nx, uint2 const ext_nx ) {
 
     int    tile_id  = blockIdx.y * gridDim.x + blockIdx.x;
     size_t tile_off = tile_id * ext_nx.x * ext_nx.y;
@@ -81,8 +83,10 @@ void _gather_kernel( float * __restrict__ out, float * __restrict__ in,
  * @param gcx1      Number of guard cells at the upper x boundary
  */
 __global__
-void _add_gcx_kernel( float * buffer, const int2 ext_nx, const int2 int_nx,
-    const int gcx0, const int gcx1 ) {
+void _add_gcx_kernel( 
+    float * const __restrict__ buffer,
+    uint2 const ext_nx, uint2 const int_nx,
+    int const gcx0, int const gcx1 ) {
 
     // Find neighbours
     const int y_coord = blockIdx.y;
@@ -126,8 +130,10 @@ void _add_gcx_kernel( float * buffer, const int2 ext_nx, const int2 int_nx,
  * @param gcy1      Number of guard cells at the upper y boundary
  */
 __global__
-void _add_gcy_kernel( float * buffer, const int2 ext_nx, const int2 int_nx,
-    const int gcy0, const int gcy1 ) {
+void _add_gcy_kernel( 
+    float * const __restrict__ buffer,
+    uint2 const ext_nx, uint2 const int_nx,
+    int const gcy0, int const gcy1 ) {
 
     // Find neighbours
     const int y_coord = blockIdx.y;
@@ -170,7 +176,9 @@ void _add_gcy_kernel( float * buffer, const int2 ext_nx, const int2 int_nx,
  * @param gcx1      Number of guard cells at the upper x boundary
  */
 __global__
-void _copy_gcx_kernel( float * buffer, const int2 ext_nx, const int2 int_nx,
+void _copy_gcx_kernel( 
+    float * const __restrict__ buffer,
+    uint2 const ext_nx, uint2 const int_nx,
     const int gcx0, const int gcx1 ) {
 
     // Find neighbours
@@ -213,8 +221,10 @@ void _copy_gcx_kernel( float * buffer, const int2 ext_nx, const int2 int_nx,
  * @param gcy1      Number of guard cells at the upper y boundary
  */
 __global__
-void _copy_gcy_kernel( float * buffer, const int2 ext_nx, const int2 int_nx,
-    const int gcy0, const int gcy1 ) {
+void _copy_gcy_kernel(
+    float * const __restrict__ buffer,
+    uint2 const ext_nx, uint2 const int_nx,
+    int const gcy0, int const gcy1 ) {
 
     // Find neighbours
     const int y_coord = blockIdx.y;
@@ -249,107 +259,48 @@ void _copy_gcy_kernel( float * buffer, const int2 ext_nx, const int2 int_nx,
 }
 
 /**
- * @brief Class Field (float grid) constructor.
+ * @brief Construct a new VFLD::VFLD object
+ * 
+ * Data is allocated on the GPU. No data initialization is performed.
+ * 
+ * @param ntiles    Number of tiles
+ * @param nx        Tile grid size
+ * @param gc        Number of guard cells
+ */
+__host__ Field::Field( uint2 const ntiles, uint2 const nx, uint2 const gc_[2]) :
+    ntiles( ntiles ), nx( nx )
+{
+    gc[0] = gc_[0];
+    gc[1] = gc_[1];
+
+    malloc_dev( d_buffer, buffer_size() );
+};
+
+/**
+ * @brief Construct a new VFLD::VFLD object without guard cells
  * 
  * Data is allocated both on the host and the GPU. No data initialization is performed.
  * 
- * @param gnx       Global dimensions of grid
- * @param tnx       Tile dimensions
- * @param gc        Number of guard cells
+ * @param ntiles    Number of tiles
+ * @param nx        Tile grid size
  */
-__host__ Field::Field( const int2 gnx_, const int2 tnx_, const int2 gc_[2]) {
+__host__ Field::Field( uint2 const ntiles, uint2 const nx ) :
+    ntiles( ntiles ), nx( nx )
+{
+    gc[0] = {0};
+    gc[1] = {0};
 
-    // Validate grid and tile sizes
-    if (( gnx_.x <= 0 ) || ( gnx_.y <= 0)) {
-        std::cerr << "(*error*) Invalid number of cells gnx: ";
-        std::cerr << gnx_.x << "," << gnx_.y << std::endl;
-        exit(1);
-    }
-
-    if (( tnx_.x <= 0 ) || ( tnx_.y <= 0)) {
-        std::cerr << "(*error*) Invalid tile size tnx: ";
-        std::cerr << tnx_.x << "," << tnx_.y << std::endl;
-        exit(1);
-    }
-
-    if ( gnx_.x % tnx_.x ) {
-        std::cerr << "(*error*) global x grid size, " << gnx_.x;
-        std::cerr << "is not a mutliple of x tile size, " << tnx_.x << "endl";
-        exit(1);
-    }
-
-    if ( gnx_.y % tnx_.y ) {
-        std::cerr << "(*error*) global y grid size, " << gnx_.y;
-        std::cerr << "is not a mutliple of y tile size, " << tnx_.y << "endl";
-        exit(1);
-    }
-
-    // Setup tile size
-    nx = tnx_;
-
-    // Setup guard cells
-    if ( gc_ ) {
-        gc[0] = gc_[0];
-        gc[1] = gc_[1];
-    } else {
-        gc[0] = int2{0};
-        gc[1] = int2{0};
-    }
-
-    // Get number of tiles in each direction
-    nxtiles.x = gnx_.x / tnx_.x;
-    nxtiles.y = gnx_.y / tnx_.y;
-
-    // Allocate global buffers
-    size_t bsize = buffer_size( ) * sizeof( float );
-
-    cudaError_t err;
-
-    err = cudaMallocHost( &h_buffer, bsize );
-    if ( err != cudaSuccess ) {
-        std::cerr << "(*error*) Unable to allocate host memory for tiled Field." << std::endl;
-        std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
-        return;
-    }
-
-    err = cudaMalloc( &d_buffer, bsize );
-    if ( err != cudaSuccess ) {
-        std::cerr << "(*error*) Unable to allocate device memory for tiled Field." << std::endl;
-        std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
-        return;
-    }
+    malloc_dev( d_buffer, buffer_size() );
 };
 
 /**
  * @brief Field destructor
  * 
- * Deallocates dynamic host and GPU memory
+ * Deallocates dynamic GPU memory
  */
 __host__ Field::~Field() {
 
-    cudaError_t err;
-
-    // Free host memory
-    err = cudaFreeHost( h_buffer );
-    if ( err != cudaSuccess ) {
-        std::cerr << "(*error*) Unable to free host memory for tiled Field." << std::endl;
-        std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
-    }
-    h_buffer = NULL;
-
-    // Free device memory
-    err = cudaFree( d_buffer );
-    if ( err != cudaSuccess ) {
-        std::cerr << "(*error*) Unable to free device memory for tiled Field." << std::endl;
-        std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
-    }
-    d_buffer = NULL;
-
-    nx = int2{0};
-    gc[0] = int2{0};
-    gc[1] = int2{0};
-
-    nxtiles = int2{0};
+    free_dev( d_buffer );
 };
 
 /**
@@ -360,17 +311,10 @@ __host__ Field::~Field() {
 __host__ void Field::set( const float val ) {
 
     const size_t size = buffer_size( );
+    int const block = 32;
+    int const grid = (size -1) / block + 1;
 
-    const int nthreads = 32;
-    int nblocks = size / nthreads;
-    if ( nthreads * nblocks < size ) nblocks++;
-
-    _set_kernel <<< nblocks, nthreads >>> ( d_buffer, val, size );
-
-    // set CPU data
-    for( size_t i = 0; i < size; i++ ) {
-        h_buffer[i] = val;
-    }
+    _set_kernel <<< grid, block >>> ( d_buffer, val, size );
 };
 
 
@@ -385,16 +329,15 @@ __host__ void Field::set( const float val ) {
 __host__ int Field::gather_host( float *  __restrict__ h_data ) {
 
     // Output data x, y dimensions
-    int2 gsize = { 
-        .x = nxtiles.x * nx.x,
-        .y = nxtiles.y * nx.y
-    };
+    uint2 gsize = make_uint2( 
+        ntiles.x * nx.x,
+        ntiles.y * nx.y
+    );
 
     float *  d_data;
-    cudaError_t err;
     size_t size = gsize.x * gsize.y;
 
-    err = cudaMalloc( &d_data, size * sizeof( float ));
+    auto err = cudaMalloc( &d_data, size * sizeof( float ));
     if ( err != cudaSuccess ) {
         std::cerr << "(*error*) Unable to allocate device memory for Field gather()." << std::endl;
         std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
@@ -402,18 +345,18 @@ __host__ int Field::gather_host( float *  __restrict__ h_data ) {
     }
 
     // Tile block size (grid + guard cells)
-    int2 ext_nx = {
-        .x = gc[0].x +  nx.x + gc[1].x,
-        .y = gc[0].y +  nx.y + gc[1].y
-    };
+    uint2 ext_nx = make_uint2(
+        gc[0].x +  nx.x + gc[1].x,
+        gc[0].y +  nx.y + gc[1].y
+    );
 
     int offset = gc[0].y * ext_nx.x + gc[0].x;
     
     // Gather data on device
     dim3 block( 64 );
-    dim3 grid( nxtiles.x, nxtiles.y );
+    dim3 grid( ntiles.x, ntiles.y );
 
-    _gather_kernel <<< grid, block >>> ( 
+    _field_gather_kernel <<< grid, block >>> ( 
         d_data, d_buffer + offset, gsize,
         nx, ext_nx );
 
@@ -445,16 +388,11 @@ __host__ int Field::gather_host( float *  __restrict__ h_data ) {
  * @return Field&    Reference to local object
  */
 __host__ void Field::add( const Field &rhs ) {
+    size_t const size = buffer_size( );
+    int const block = 32;
+    int const grid = (size -1) / block + 1;
 
-    const size_t size = buffer_size( );
-    float * __restrict__ a = d_buffer;
-    float * __restrict__ b = rhs.d_buffer;
-
-    const int nthreads = 32;
-    int nblocks = size / nthreads;
-    if ( nthreads * nblocks < size ) nblocks++;
-
-    _add_kernel <<< nblocks, nthreads >>> ( a, b, size );
+    _add_kernel <<< grid, block >>> ( d_buffer, rhs.d_buffer, size );
 };
 
 
@@ -465,10 +403,10 @@ __host__ void Field::add( const Field &rhs ) {
 __host__
 void Field::copy_to_gc() {
 
-    int2 ext = ext_nx();
+    uint2 ext = ext_nx();
 
+    dim3 grid( ntiles.x, ntiles.y );
     dim3 block( 64 );
-    dim3 grid( nxtiles.x, nxtiles.y );
 
     _copy_gcx_kernel <<< grid, block >>> (
         d_buffer, ext, nx, gc[0].x, gc[1].x
@@ -486,10 +424,10 @@ void Field::copy_to_gc() {
 __host__
 void Field::add_from_gc() {
 
-    int2 ext = ext_nx();
+    uint2 ext = ext_nx();
 
+    dim3 grid( ntiles.x, ntiles.y );
     dim3 block( 64 );
-    dim3 grid( nxtiles.x, nxtiles.y );
 
     _add_gcx_kernel <<< grid, block >>> (
         d_buffer, ext, nx, gc[0].x, gc[1].x
@@ -512,8 +450,8 @@ void Field::save( t_zdf_grid_info &info, t_zdf_iteration &iter, std::string path
 
     // Fill in grid dimensions
     info.ndims = 2;
-    info.count[0] = nxtiles.x * nx.x;
-    info.count[1] = nxtiles.y * nx.y;
+    info.count[0] = ntiles.x * nx.x;
+    info.count[1] = ntiles.y * nx.y;
 
     // Allocate buffer on host to gather data
     float *  h_buffer;

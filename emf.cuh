@@ -18,20 +18,18 @@ class EMF {
     // time step
     float dt;
 
-    // Iteration number (device / host)
-    int d_iter, h_iter;
+    // Iteration number
+    int iter;
 
-    __host__ EMF( const int2 gnx, const int2 tnx, const float2 box, const float dt );
+    __host__ EMF( uint2 const ntiles, uint2 const nx, float2 const box, float const dt );
     __host__ ~EMF();
-
-    __host__ void update_data( const VFLD::copy_direction direction );
 
     __host__ void advance();
 
     __host__ void add_laser( Laser& laser );
 
     enum diag_fld { EFLD, BFLD };
-    __host__ void report( const diag_fld field, const int fc );
+    __host__ void report( diag_fld const field, int const fc );
     __host__ void get_energy( double energy[6] );
 
 };

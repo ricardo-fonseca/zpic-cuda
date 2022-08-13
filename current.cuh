@@ -8,7 +8,7 @@ class Current {
     public:
 
     // Current density
-    VFLD* J;
+    VFLD * J;
             
     // Simulation box info
     float2 box;
@@ -20,13 +20,11 @@ class Current {
     // Filtering parameters
     //Filter filter;
 
-    // Iteration number (device / host)
-    int d_iter, h_iter;
+    // Iteration number
+    int iter;
 
-    __host__ Current( const int2 gnx, const int2 tnx, const float2 box, const float dt );
+    __host__ Current( uint2 const ntiles, uint2 const nx, float2 const box, float const dt );
     __host__ ~Current();
-
-    __host__ void update_data( const VFLD::copy_direction direction );
 
     __host__ void advance();
     __host__ void zero();

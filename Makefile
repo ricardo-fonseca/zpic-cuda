@@ -2,8 +2,8 @@ NVCC = nvcc
 CFLAGS = -O3
 LDFLAGS =
  
-SOURCE = field.cu tile_vfld.cu tile_part.cu tile_zdf.cu \
-         emf.cu laser.cu current.cu particles.cu \
+SOURCE = field.cu particles.cu tile_vfld.cu tile_zdf.cu \
+         emf.cu laser.cu current.cu species.cu \
          main.cu
 
 # Add ZDF library

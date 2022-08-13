@@ -1,87 +1,118 @@
 #ifndef __PARTICLES__
 #define __PARTICLES__
 
-#include <string>
-#include "tile_part.cuh"
+#include "util.cuh"
+#include "tile_zdf.cuh"
 
-#include "field.cuh"
+#include <cooperative_groups.h>
+#include <cooperative_groups/reduce.h>
+namespace cg = cooperative_groups;
 
-#include "emf.cuh"
-#include "current.cuh"
+namespace part {
+    enum quant { x, y, ux, uy, uz };
+}
 
-class Species {
+/**
+ * @brief Information on a single particle tile
+ * 
+ */
+typedef struct ParticlesTile {
+
+    // Tile ID
+    uint2 tile;
+
+    // Position on global buffer
+    unsigned int pos;
+
+    // Number of particles
+    unsigned int n;
+
+    // Number of particles (b)
+    // Used when 2 different sets are in the same buffer
+    unsigned int nb;
+
+} t_part_tile;
+
+class Particles {
+    
+    private:
+
+    // Used by np and np_exscan functions to return the number of particles
+    // to host
+    device::Var<unsigned int> _dev_np;
+
     public:
 
-    // Species name
-    std::string name;
+    uint2 ntiles;
+    uint2 nx;       // Tile grid size (valid ix is in the range 0 .. nx-1)
+    unsigned int max_np_tile;
 
-    // Particle data buffer
-    TilePart *particles;
+    // Device data pointers
+    int2 *ix;
+    float2 *x;
+    float3 *u;
 
-    // Mass over charge ratio
-    float m_q;
-
-    // Total kinetic energy
-    double energy;
-
-    // Charge of individual partilce
-    float q;
-
-    // Number of particles per cell
-    int2 ppc;
-
-    // Initial density profile
-    // Density density;
-
-    // Initial fluid and thermal momenta
-    float3 ufl, uth;
-
-    // Cell and simulation box size
-    float2 dx,  box;
-
-    // Time step
-    float dt;
-
-    // Iteration
-    int d_iter, h_iter;
+    t_part_tile *tiles;
 
     __host__
-    Species( const std::string name, const float m_q, const int2 ppc,
-        const float n0, const float3 ufl, const float3 uth,
-        const float2 box, const int2 gnx, const int2 tnx, const float dt );
+    Particles( uint2 const ntiles, uint2 const nx, unsigned int const max_np_tile );
+
+    __host__
+    ~Particles() {
+        free_dev( u );
+        free_dev( x );
+        free_dev( ix );
+    }
+
+    /**
+     * @brief Returns global grid size
+     * 
+     * @return uint2 
+     */
+    __host__
+    auto g_nx() { return make_uint2 ( ntiles.x * nx.x, ntiles.y * nx.y ); };
+
+    __host__
+    /**
+     * @brief Gets total number of particles on device
+     * 
+     * @return unsigned long long   Total number of particles
+     */
+    unsigned int np();
+
+    __host__
+    unsigned int np_exscan( unsigned int * const __restrict__ d_offset );
+
+    __host__
+    void gather( part::quant quant, float * const __restrict__ h_data );
+
+    __host__
+    void gather( part::quant quant, float * const __restrict__ h_data, float * const __restrict__ d_data, 
+        unsigned int const np, unsigned int const * const __restrict__ d_np_scan );
     
     __host__
-    ~Species();
+    /**
+     * @brief Validates particle data
+     * 
+     * In case of invalid particle data prints out an error message and aborts
+     * the program
+     * 
+     * @param msg   Message to print in case of error
+     */
+    void validate( std::string msg );
 
     __host__
-    void inject_particles( );
+    /**
+     * @brief 
+     * 
+     */
+    void tile_sort( );
+    void tile_sort( Particles &tmp );
 
     __host__
-    void set_u();
-
-    __host__
-    void advance( EMF &emf, Current &current );
-
-    __host__
-    void move_deposit( VFLD &current );
-
-    __host__
-    void deposit_charge( Field &charge );
-
-    __host__
-    void deposit_phasespace( const int rep_type, const int2 pha_nx, const float2 pha_range[2],
-        float buf[]);
-        
-    __host__
-    void report( const int rep_type, const int2 pha_nx, const float2 pha_range[2]);
-
-    __host__
-    void save_particles();
-
-    __host__
-    void save_charge();
-
+    void save( t_zdf_part_info &info, t_zdf_iteration &iter, std::string path );
 };
+
 
 
 #endif

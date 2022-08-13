@@ -1,22 +1,49 @@
 # ZPIC CUDA Development
 
+## 2022.8.12
+
+* Renames `tile_part` to `Particles` class, `particles` to `Species` class
+  * Adds save method to `Particles` to save particle data
+  * Implements device np and np_exscan functions
+  * Implements overloaded versions of gather() function, improved performance when gathering multiple quantities sequentially
+  * Adds validade method (currently only checks cells/positions)
+  * Adds tile_sort() method: reassigns particles that crossed tile boundaries
+
+* Implements full species advance deposit
+  * Implements particle push (velocity advance)
+    * Field interpolation using linear splines
+    * Velocity advance using traditional relativistic Boris pusher (linearized rotation tangent)
+  * Implements move deposit
+    * Particle motion using traditional leap-frog method
+    * Current deposition using linear splines and Villasenor-Buneman method
+
+* Changes to VFLD + Field classes
+  * Removed CPU copies, all calculations on GPU
+  * Makes tile structure data unsigned
+  * Constructor now takes ntiles and nx. Adds overloaded constructor for gc = 0
+
+* Minor improvements
+  * Adds `const` and `__restrict__` qualifiers all over
+  * Uses cooperative groups sync() instead of __syncthreads() for thread block synchronization
+  * Adds a number of utility functions for data allocation / deallocation, copy, simple reduction / scan operations, and scalar variables in device memory (accessible from host)
+
 ## 2022.8.5
 
 * Implements particle move_deposit
   * Fully relativistic leap-frog implementation complete
-  * Acceleration (du_dt) will be implemented in a separate kernel to save on shared memory
+  * Acceleration (push) will be implemented in a separate kernel to save on shared memory
   * Initial implementation of current deposit equal to OpenACC version
     * Am convinced that trajectory splitting (aka virtual particles), with virtual particles stored in shared memory is the way to go
-* Improvements on the random module
+* Improvements on the `random` module
   * Enables use on host code
-  * Adds real1, real2 and real3 flavours
+  * Adds `real1`, `real2` and `real3` flavours
   * Adds state initializer. On `__device__` code this ensures a different state for each thread
-* Adds copy_to_gc() and add_from_gc() methods to VFLD
-  * Removes the old update_gc() method
-  * Also fixed a bug on Field::add_from_gc()
+* Adds `copy_to_gc()` and `add_from_gc()` methods to VFLD
+  * Removes the old `update_gc()` method
+  * Also fixed a bug on `Field::add_from_gc()`
 * Fixes initializers for Current, EMF and Species objects
-* Adds VFLD::save() method
-  * Removes the old zdf_save_tile_vfld() routine
+* Adds `VFLD::save()` method
+  * Removes the old `zdf_save_tile_vfld()` routine
 * Adds histogram plots and several plot options for all visXD notebook routines
 * Adds code documentation in several places
 

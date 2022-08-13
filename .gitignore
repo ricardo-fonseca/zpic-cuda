@@ -19,3 +19,10 @@ PARTICLES/
 
 # Python leftovers
 __pycache__/
+
+# VS Code leftovers
+*.code-workspace
+.vscode/configurationCache.log
+.vscode/dryrun.log
+.vscode/launch.json
+.vscode/targets.log

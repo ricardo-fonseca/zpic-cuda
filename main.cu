@@ -3,20 +3,20 @@
 #include "zpic.h"
 #include "timer.cuh"
 #include "emf.cuh"
-#include "particles.cuh"
+#include "species.cuh"
 
 
 void test_emf() {
 
-    int2 gnx = {256, 256};
-    int2 tnx = {16,16};
+    uint2 ntiles = {16, 16};
+    uint2 nx = {16,16};
 
     float2 box = {25.6, 25.6};
     float dt = 0.07;
 
     float tmax = 4.0;
 
-    EMF emf( gnx, tnx, box, dt );
+    EMF emf( ntiles, nx, box, dt );
 
 /*
     Laser laser;
@@ -52,7 +52,7 @@ void test_emf() {
     emf.report( EMF::BFLD, 1 );
     emf.report( EMF::BFLD, 2 );
 
-    while( emf.d_iter * emf.dt < tmax ) {
+    while( emf.iter * emf.dt < tmax ) {
         emf.advance();
         emf.report( EMF::EFLD, 0 );
         emf.report( EMF::EFLD, 1 );
@@ -74,33 +74,46 @@ int main() {
 
     Timer timer;
 
-    int2 gnx = {256, 256};
-    int2 tnx = {16,16};
+    uint2 ntiles = {16, 16};
+    uint2 nx = {16,16};
 
     float2 box = {25.6, 25.6};
     float dt = 0.07;
 
-    Current current( gnx, tnx, box, dt );
+    Current current( ntiles, nx, box, dt );
 
-    int2 ppc = {8,8};
+    uint2 ppc = {8,8};
     //float3 ufl = {1.0, 2.0, 3.0};
     // float3 uth = {0.1, 0.2, 0.3};
-    float3 ufl = {1000., 1000., 1000.0};
+    float3 ufl = {1000., 1000., 1000.};
     float3 uth = {0};
 
     Species electrons( "electrons", -1, ppc, 1.0, 
-        ufl, uth, box, gnx, tnx, dt );
+        ufl, uth, box, ntiles, nx, dt );
 
     timer.start();
 
     electrons.save_particles();
     electrons.save_charge();
 
-    electrons.move_deposit( *current.J );
+    float tmax = 4.0;
+    while( electrons.iter * electrons.dt < tmax ) {
+        printf(" i = %3d, t = %g \n", electrons.iter, electrons.iter * electrons.dt );
+       
+        current.zero();
+       
+        electrons.move_deposit( current.J );
+        electrons.tile_sort();
+        electrons.iter ++;
+
+        current.advance();
+    }
 
     current.report(0);
     current.report(1);
     current.report(2);
+    electrons.save_particles();
+    electrons.save_charge();
 
     timer.stop();
 

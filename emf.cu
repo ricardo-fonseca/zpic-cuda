@@ -2,30 +2,33 @@
 #include <iostream>
 #include "tile_zdf.cuh"
 
+#include <cooperative_groups.h>
+namespace cg=cooperative_groups;
+
 /**
  * @brief Construct a new EMF::EMF object
  * 
- * @param gnx   Global grid size
- * @param tnx   Tile grid size
- * @param box   Simulation box dimensions
- * @param dt    Time step size
+ * @param ntiles    Number of tiles
+ * @param nx        Tile grid size
+ * @param box       Box size
+ * @param dt        Time step
  */
 __host__
-EMF::EMF( const int2 gnx, const int2 tnx, const float2 box, const float dt ) :
-    box{box}, dt{dt} {
-
+EMF::EMF( uint2 const ntiles, uint2 const nx, float2 const box,
+    float const dt ) : box{box}, dt{dt}
+{
     std::cout << "(*info*) Initialize emf..." << std::endl;
 
     // Set box limits, cells sizes and time step
-    dx.x = box.x / gnx.x;
-    dx.y = box.y / gnx.y;
+    dx.x = box.x / ( nx.x * ntiles.x );
+    dx.y = box.y / ( nx.y * ntiles.y );
 
     // Guard cells (1 below, 2 above)
     // These are required for the Yee solver AND for field interpolation
-    int2 gc[2] = {{1,1},{2,2}}; 
+    uint2 gc[2] = { make_uint2(1,1), make_uint2(2,2) }; 
 
-    E = new VFLD( gnx, tnx, gc );
-    B = new VFLD( gnx, tnx, gc );
+    E = new VFLD( ntiles, nx, gc );
+    B = new VFLD( ntiles, nx, gc );
 
     std::cout << "(*info*) Zeroing fields..." << std::endl;
 
@@ -34,7 +37,7 @@ EMF::EMF( const int2 gnx, const int2 tnx, const float2 box, const float dt ) :
     B -> zero();
 
     // Reset iteration number
-    d_iter = h_iter = 0;
+    iter = 0;
 
     std::cout << "(*info*) Initialize emf done!" << std::endl;
 }
@@ -50,33 +53,7 @@ EMF::~EMF(){
 
     delete (E);
     delete (B);
-    
-    d_iter = h_iter = -1;
 }
-
-/**
- * @brief Updates host/device data from device/host data
- * 
- * It will also set the iteration numbers accordingly
- * 
- */
-void EMF::update_data( const VFLD::copy_direction direction ) {
-
-    E -> update_data( direction );
-    B -> update_data( direction );
-
-    switch( direction ) {
-    case VFLD::host_device:  // Host to device
-        d_iter = h_iter;
-       break;
-    case VFLD::device_host: // Device to host
-        h_iter = d_iter;
-        break;
-    default:
-        std::cerr << "(*error*) Invalid direction in EMF::update() call." << std::endl;
-    }
-}
-
 
 /**
  * @brief B advance for Yee algorithm
@@ -89,15 +66,19 @@ void EMF::update_data( const VFLD::copy_direction direction ) {
  * @param dt_dy     \Delta t / \Delta y
  */
 __device__
-void yee_b( float3 * E, float3 * B, int2 nx, 
-    const int stride, const float dt_dx, const float dt_dy ) {
-
-    const int vol = ( nx.x + 2 ) * ( nx.y + 2 );
+void yee_b( 
+    float3 const * const __restrict__ E, 
+    float3 * const __restrict__ B, 
+    uint2 const nx, unsigned int const stride, 
+    float const dt_dx, float const dt_dy )
+{
+    unsigned int const vol = ( nx.x + 2 ) * ( nx.y + 2 );
+    int const step = nx.x + 2;
 
     // The y and x loops are fused into a single loop to improve parallelism
     for( int idx = threadIdx.x; idx < vol; idx += blockDim.x ) {
-        const int i = -1 + idx % ( nx.x + 2 );  // range is -1 to nx
-        const int j = -1 + idx / ( nx.x + 2 );
+        const int i = -1 + idx % step;  // range is -1 to nx
+        const int j = -1 + idx / step;
         
         B[ i + j*stride ].x += ( - dt_dy * ( E[i+(j+1)*stride].z - E[i+j*stride].z ) );  
         B[ i + j*stride ].y += (   dt_dx * ( E[(i+1)+j*stride].z - E[i+j*stride].z ) );  
@@ -118,10 +99,13 @@ void yee_b( float3 * E, float3 * B, int2 nx,
  * @param dt_dy     \Delta t / \Delta y
  */
 __device__
-void yee_e( float3 * E, float3 * B, int2 nx, 
-    const int stride, const float dt_dx, const float dt_dy ) {
-
-    const int vol = ( nx.x + 2 ) * ( nx.y + 2 );
+void yee_e( 
+    float3 * const __restrict__ E, 
+    float3 const * const __restrict__ B, 
+    uint2 const nx, unsigned int const stride, 
+    float const dt_dx, float const dt_dy )
+{
+    unsigned int const vol = ( nx.x + 2 ) * ( nx.y + 2 );
 
     // The y and x loops are fused into a single loop to improve parallelism
     for( int idx = threadIdx.x; idx < vol; idx += blockDim.x ) {
@@ -149,9 +133,13 @@ __global__
  * @param ext_nx    Tile size (external) i.e including guard cells
  * @param dt_dx     Time step over cell size
  */
-void yee_kernel( float3 * d_E, float3 * d_B, int2 int_nx, int offset, 
-    int2 ext_nx, float2 dt_dx ) {
+void yee_kernel( 
+    float3 * const __restrict__ d_E,
+    float3 * const __restrict__ d_B,
+    uint2 const int_nx, unsigned int const offset, 
+    uint2 const ext_nx, float2 const dt_dx ) {
 
+    auto block = cg::this_thread_block();
     extern __shared__ float3 buffer[];
     
     const float dt_dx2 = dt_dx.x / 2.0f;
@@ -161,29 +149,28 @@ void yee_kernel( float3 * d_E, float3 * d_B, int2 int_nx, int offset,
     const int B_off = ext_nx.x * ext_nx.y;
 
     // Copy E and B into shared memory and sync
-    for( int i = threadIdx.x; i < ext_nx.x * ext_nx.y; i += blockDim.x ) {
+    for( int i = block.thread_rank(); i < ext_nx.x * ext_nx.y; i += block.num_threads() ) {
         buffer[i        ] = d_E[tile_off + i];
         buffer[B_off + i] = d_B[tile_off + i];
     }
 
-    float3* E = buffer + offset;
-    float3* B = E + B_off; 
+    float3 * const E = buffer + offset;
+    float3 * const B = E + B_off; 
 
-    __syncthreads();
-
-    // Perform half B field advance and sync
+    // Perform half B field advance
+    block.sync();
     yee_b( E, B , int_nx, ext_nx.x, dt_dx2, dt_dy2 );
-    __syncthreads();
 
-    // Perform full E field advance and sync
+    // Perform full E field advance
+    block.sync();
     yee_e( E, B, int_nx, ext_nx.x, dt_dx.x, dt_dx.y );
-    __syncthreads();
 
     // Perform half B field advance and sync
+    block.sync();
     yee_b( E, B, int_nx, ext_nx.x, dt_dx2, dt_dy2 );
-    __syncthreads();
-
+ 
     // Copy data to global memory
+    block.sync();
     for( int i = threadIdx.x; i < ext_nx.x * ext_nx.y; i += blockDim.x ) {
         d_E[tile_off + i] = buffer[i];
         d_B[tile_off + i] = buffer[B_off + i];
@@ -198,18 +185,17 @@ void yee_kernel( float3 * d_E, float3 * d_B, int2 int_nx, int offset,
 __host__
 void EMF::advance() {
 
-    std::cout << "(*info*) Advance emf (" << d_iter << ")" << std::endl;
+    std::cout << "(*info*) Advance emf (" << iter << ")" << std::endl;
 
     // Tile block size (grid + guard cells)
-    int2 ext_nx = E -> ext_nx();
+    uint2 ext_nx = E -> ext_nx();
 
-    float2 dt_dx = {
-        .x = dt / dx.x,
-        .y = dt / dx.y
-    };
+    float2 dt_dx = make_float2(
+        dt / dx.x,
+        dt / dx.y
+    );
 
-
-    dim3 grid( E->nxtiles.x, E->nxtiles.y );
+    dim3 grid( E->ntiles.x, E->ntiles.y );
     dim3 block( 64 );
     size_t shm_size = 2 * ext_nx.x * ext_nx.y * sizeof(float3);
 
@@ -224,7 +210,7 @@ void EMF::advance() {
     B -> copy_to_gc();
 
     // Advance internal iteration number
-    d_iter += 1;
+    iter += 1;
 }
 
 /**
@@ -311,17 +297,17 @@ void EMF::report( const diag_fld field, const int fc ) {
     	.axis = axis
     };
 
-    info.count[0] = E -> nxtiles.x * E -> nx.x;
-    info.count[1] = E -> nxtiles.y * E -> nx.y;
+    info.count[0] = E -> ntiles.x * E -> nx.x;
+    info.count[1] = E -> ntiles.y * E -> nx.y;
 
 
-    t_zdf_iteration iter = {
-    	.n = d_iter,
-    	.t = d_iter * dt,
+    t_zdf_iteration iteration = {
+    	.n = iter,
+    	.t = iter * dt,
     	.time_units = (char *) "1/\\omega_p"
     };
 
-    f -> save( fc, info, iter, "EMF" );
+    f -> save( fc, info, iteration, "EMF" );
 }
 
 /**
