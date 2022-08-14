@@ -454,24 +454,12 @@ void Field::save( t_zdf_grid_info &info, t_zdf_iteration &iter, std::string path
     info.count[1] = ntiles.y * nx.y;
 
     // Allocate buffer on host to gather data
-    float *  h_buffer;
-    cudaError_t err;
+    float *h_data;
+    malloc_host( h_data, info.count[0] * info.count[1] );
 
-    err = cudaMallocHost( &h_buffer, info.count[0] * info.count[1] * sizeof( float ) );
-    if ( err != cudaSuccess ) {
-        std::cerr << "(*error*) Unable to allocate host memory for field save" << std::endl;
-        std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
-        return;
-    }
+    if ( ! gather_host( h_data ) )
+        zdf_save_grid( h_data, info, iter, path );
 
-    if ( ! gather_host( h_buffer ) ) 
-        zdf_save_grid( h_buffer, info, iter, path );
-
-    err = cudaFreeHost( h_buffer );
-    if ( err != cudaSuccess ) {
-        std::cerr << "(*error*) Unable to free host memory for field save" << std::endl;
-        std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
-        return;
-    }
+    free_host( h_data );
 
 };

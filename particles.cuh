@@ -40,12 +40,12 @@ class Particles {
     // Used by np and np_exscan functions to return the number of particles
     // to host
     device::Var<unsigned int> _dev_np;
+    unsigned int max_np_tile;
 
     public:
 
     uint2 ntiles;
     uint2 nx;       // Tile grid size (valid ix is in the range 0 .. nx-1)
-    unsigned int max_np_tile;
 
     // Device data pointers
     int2 *ix;
@@ -100,6 +100,7 @@ class Particles {
      * @param msg   Message to print in case of error
      */
     void validate( std::string msg );
+    void validate( std::string msg, int const over );
 
     __host__
     /**
@@ -111,6 +112,9 @@ class Particles {
 
     __host__
     void save( t_zdf_part_info &info, t_zdf_iteration &iter, std::string path );
+
+    __host__
+    void check_tiles();
 };
 
 

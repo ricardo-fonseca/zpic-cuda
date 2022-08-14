@@ -26,3 +26,4 @@ __pycache__/
 .vscode/dryrun.log
 .vscode/launch.json
 .vscode/targets.log
+.vscode/settings.json

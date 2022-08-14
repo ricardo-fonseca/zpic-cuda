@@ -17,6 +17,7 @@ OBJ = $(SOURCE:.cu=.o)
 # Add C object files
 OBJ := $(OBJ:.c=.o)
 
+.PHONY: all
 all: $(SOURCE) $(TARGET)
 
 $(TARGET) : $(OBJ)
@@ -28,6 +29,10 @@ $(TARGET) : $(OBJ)
 %.o : %.c
 	$(NVCC) -c $(CFLAGS) $< -o $@
 
-clean:
+.PHONY: clean
+clean :
 	@touch $(TARGET) $(OBJ)
 	rm -f $(TARGET) $(OBJ)
+
+
+

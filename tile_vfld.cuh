@@ -35,7 +35,8 @@ class VFLD {
     }
     __host__ void add( const VFLD &rhs );
 
-    __host__ int gather( const int fc, float * data );
+    __host__ 
+    int gather_host( const int fc, float * const __restrict__ h_data );
 
     /**
      * @brief Tile size

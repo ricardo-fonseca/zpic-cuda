@@ -82,7 +82,7 @@ class Field {
      * @param Field      Pointer to Field variable
      * @param data      Output buffer, must be pre-allocated
      */
-    __host__ int gather_host( float * __restrict__ h_data );
+    __host__ int gather_host( float * const __restrict__ h_data );
 
     /**
      * @brief Adds another Field object on top of local object

@@ -2,6 +2,7 @@
 #define __CURRENT__
 
 #include "tile_vfld.cuh"
+#include "util.cuh"
 
 class Current {
 
@@ -28,7 +29,7 @@ class Current {
 
     __host__ void advance();
     __host__ void zero();
-    __host__ void report( const int jc );
+    __host__ void save( fcomp::cart const jc );
 
 };
 

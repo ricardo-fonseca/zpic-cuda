@@ -24,7 +24,6 @@ __host__
 Current::Current( uint2 const ntiles, uint2 const nx, float2 const box,
     float const dt ) : box{box}, dt{dt}
 {
-    std::cout << "(*info*) Initialize current..." << std::endl;
 
     dx.x = box.x / ( nx.x * ntiles.x );
     dx.y = box.y / ( nx.y * ntiles.y );
@@ -36,14 +35,13 @@ Current::Current( uint2 const ntiles, uint2 const nx, float2 const box,
     J = new VFLD( ntiles, nx, gc );
 
     // Zero initial current
-    // This is only relevant for diagnostics, current is always zeroed before deposition
-    std::cout << "(*info*) Zeroing current..." << std::endl;
+    // This is only relevant for diagnostics, current should always zeroed before deposition
     J -> zero();
 
     // Reset iteration number
     iter = 0;
 
-    std::cout << "(*info*) Initialize current done!" << std::endl;
+    std::cout << "(*info*) Current object initialized." << std::endl;
 }
 
 __host__
@@ -68,6 +66,7 @@ void Current::advance() {
 
     // Add up current deposited on guard cells
     J -> add_from_gc();
+    J -> copy_to_gc();
 
     // Apply filtering
     // filter -> apply( *J );
@@ -90,9 +89,9 @@ __host__
  * 
  * @param jc        Current component to save (0, 1 or 2)
  */
-void Current::report( const int jc ) {
+void Current::save( fcomp::cart const jc ) {
 
-        char vfname[16];	// Dataset name
+    char vfname[16];	// Dataset name
     char vflabel[16];	// Dataset label (for plots)
 
     char comp[] = {'x','y','z'};

@@ -29,25 +29,21 @@ namespace cg = cooperative_groups;
 }
 
 /**
- * @brief Calls cudaDeviceSynchronize(), and exits code in case of error
+ * @brief Checks if there are any synchronous or asynchronous errors from CUDA calls
  * 
- * This can be used to check if there were any errors on earlier kernel calls. In case of an error
- * the routine will printout the error message and the function / file / line where the function
- * was called.
+ * If any errors are found the routine will print out the error messages and exit
+ * the program
  */
-#define deviceSynchronize() { \
-    cudaError_t err = cudaPeekAtLastError(); \
-    if ( err != cudaSuccess ) { \
-        std::cerr << "(*error*) CUDA is on error state on " << __func__ << "()\n"; \
-        std::cerr << " - " << __FILE__ << "(" << __LINE__ << ")" << std::endl; \
-        std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl; \
-        exit(1); \
-    }; \
-    err = cudaDeviceSynchronize(); \
-    if ( err != cudaSuccess ) { \
-        std::cerr << "(*error*) Unable to synchronize on " << __func__ << "()\n"; \
-        std::cerr << " - " << __FILE__ << "(" << __LINE__ << ")" << std::endl; \
-        std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl; \
+#define deviceCheck() { \
+    auto err_sync = cudaPeekAtLastError(); \
+    auto err_async = cudaDeviceSynchronize(); \
+    if (( err_sync != cudaSuccess ) || ( err_async != cudaSuccess )) { \
+        std::cerr << "(*error*) CUDA device is on error state at " << __func__ << "()\n"; \
+        std::cerr << " (" << __FILE__ << ":" << __LINE__ << ")\n"; \
+        if ( err_sync != cudaSuccess ) \
+            std::cerr << "(*error*) Sync. error message: " << cudaGetErrorString(err_sync) << " (" << err_sync << ") \n"; \
+        if ( err_async != cudaSuccess ) \
+            std::cerr << "(*error*) Async. error message: " << cudaGetErrorString(err_async) << " (" << err_async << ") \n"; \
         exit(1); \
     } \
 }
@@ -463,6 +459,10 @@ T exclusive_scan( T * const __restrict__ data, unsigned int const size ) {
     return sum.get();
 }
 
+}
+
+namespace fcomp {
+    enum cart  { x = 0, y, z };
 }
 
 #endif

@@ -3,6 +3,12 @@
 
 #include "tile_vfld.cuh"
 #include "laser.cuh"
+#include "current.cuh"
+#include "util.cuh"
+
+namespace emf {
+    enum field  { e, b };
+}
 
 class EMF {
     public:
@@ -24,12 +30,14 @@ class EMF {
     __host__ EMF( uint2 const ntiles, uint2 const nx, float2 const box, float const dt );
     __host__ ~EMF();
 
-    __host__ void advance();
+    __host__
+    void advance( Current & current );
+    __host__
+    void advance( );
 
     __host__ void add_laser( Laser& laser );
 
-    enum diag_fld { EFLD, BFLD };
-    __host__ void report( diag_fld const field, int const fc );
+    __host__ void save( emf::field const field, const fcomp::cart fc );
     __host__ void get_energy( double energy[6] );
 
 };

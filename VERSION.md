@@ -1,5 +1,49 @@
 # ZPIC CUDA Development
 
+## 2022.8.13
+
+* Adds new top level Simulation class
+  * Holds one EMF and one Current objects
+  * Holds a vector of Species objects
+  * Implements methods for adding / getting Species objects
+  * Implements method for adding laser pulses
+  * Implements advance method that advances the simulation 1 timestep
+* main file
+  * Has been restructured using new classes
+    * Previous tests moved into `test_emf` and `test_sort_deposit`
+  * Implements the canonical Weibel simulation test!
+* Species class
+  * Updates code to the new [-0.5,0.5[ particle position scheme (distance from center of the cell)
+  * Removes `inject_particles` and `set_u` calls from constructor, objects are now created without any particles
+  * Fixes the uniform density injection kernel
+  * Implements new `density::parameters` type to specify injection profiles (which are no longer hardcoded)
+  * Implements new `Species::move()` method where no current is deposited
+* EMF class
+  * Adds field advance including electric current
+  * Renames `report` -> `save` (finally!)
+* Current class
+  * Fixes issue in `Current::advance()`, data was not being copied to gc causing EM field solver issue
+  * Renames `report` -> `save` (finally!)
+* Particles classe
+  * Particles positions now use the OSIRIS [-0.5,0.5[ position scheme (distance from center of the cell) for improved numerics
+  * Improves `Particles::validate()` method, now checks all particle data and allows for overflow
+  * Adds `Particles::check_tiles()` method to check on the number of particle per tiles (debug only)
+* VFLD class
+  * Improves the `VFLD::save()` method, all internal info is now set in this routine
+* Field class
+  * Improves the `Field::save()` method, all internal info is now set in this routine
+  * Moved memory allocation now uses `malloc_host()` and `free_host()` routines everywhere
+* Random class
+  * Removed host support (was breaking device code), may be reinstated at a later time
+  * Improved the per cell seed initialization
+* Minor changes
+  * adds `clean` script to remove diagnostic output
+  * enum values defining multiple parameters have been moved into namespaces
+  * replaces the `deviceSynchronize()` macro with a better `deviceCheck()` one that reports both synchronous and assynchronous errors (if any)
+* Moves visualization routines to new `visxd` python module
+  * `plot2d` routine has been renamed `grid2d` (and it may change again in the future ;-) and adds a new `vsim` (symmetric color scale) parameter
+  * Replaces `FileNotFoundError` exceptions with simple error message.
+
 ## 2022.8.12
 
 * Renames `tile_part` to `Particles` class, `particles` to `Species` class

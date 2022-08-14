@@ -1,0 +1,4 @@
+#!/bin/sh 
+echo "Removing simulation diagnostic output..."
+
+rm -Rf CHARGE/ CURRENT/ EMF/ PARTICLES/

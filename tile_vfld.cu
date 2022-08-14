@@ -68,7 +68,7 @@ int VFLD::zero( ) {
     if ( err != cudaSuccess ) {
         std::cerr << "(*error*) Unable to zero device memory for float3 tiled grid." << std::endl;
         std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
-        return -1;
+        exit(1);
     }
 
     return 0;
@@ -211,7 +211,8 @@ void _gather_kernelz(
  * @param data      Output buffer, must be pre-allocated
  */
 __host__
-int VFLD :: gather( const int fc, float * data ) {
+int VFLD :: gather_host( const int fc, float * const __restrict__ h_data )
+ {
 
     // Output data x, y dimensions
     uint2 gsize = make_uint2( 
@@ -245,7 +246,7 @@ int VFLD :: gather( const int fc, float * data ) {
     }
 
     // Copy data to local buffer
-    auto err = cudaMemcpy( data, d_data, size * sizeof(float), cudaMemcpyDeviceToHost );
+    auto err = cudaMemcpy( h_data, d_data, size * sizeof(float), cudaMemcpyDeviceToHost );
     if ( err != cudaSuccess ) {
         std::cerr << "(*error*) Unable to copy data back to cpu in vfld_gather()." << std::endl;
         std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
@@ -552,17 +553,20 @@ __host__
 */
 int VFLD::save( const int fc, t_zdf_grid_info &info, t_zdf_iteration &iter, std::string path )
 {
-    const size_t size = ( ntiles.x * nx.x ) *
-                        ( ntiles.y * nx.y );
 
-    float *data;
-    malloc_host( data, size );
+    // Fill in grid dimensions
+    info.ndims = 2;
+    info.count[0] = ntiles.x * nx.x;
+    info.count[1] = ntiles.y * nx.y;
 
-    gather( fc, data );
+    // Allocate buffer on host to gather data
+    float *h_data;
+    malloc_host( h_data, info.count[0] * info.count[1] );
 
-    zdf_save_grid( data, info, iter, path );
+    if ( ! gather_host( fc, h_data ) )
+        zdf_save_grid( h_data, info, iter, path );
 
-    free_host( data );
+    free_host( h_data );
 
     return 0;
 }

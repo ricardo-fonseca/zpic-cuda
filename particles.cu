@@ -178,7 +178,7 @@ void _gather_x_kernel( int2 * const __restrict__ d_ix, float2 * const __restrict
     unsigned int const out_offset = d_out_offset[ tid ];
 
     for( int idx = threadIdx.x; idx < np; idx += blockDim.x ) {
-        d_data[ out_offset + idx ] = blockIdx.x * tile_nx + (ix[idx].x + x[idx].x);
+        d_data[ out_offset + idx ] = (blockIdx.x * tile_nx + ix[idx].x) + (0.5f + x[idx].x);
     }
 };
 
@@ -198,7 +198,7 @@ void _gather_y_kernel( int2 * const __restrict__ d_ix, float2 * const __restrict
     unsigned int const out_offset = d_out_offset[ tid ];
 
     for( int idx = threadIdx.x; idx < np; idx += blockDim.x ) {
-        d_data[ out_offset + idx ] = blockIdx.y * tile_ny + (ix[idx].y + x[idx].y);
+        d_data[ out_offset + idx ] = ( blockIdx.y * tile_ny + ix[idx].y ) + ( 0.5f + x[idx].y);
     }
 };
 
@@ -773,6 +773,7 @@ void Particles::tile_sort( Particles &tmp ) {
         tiles, ix, x, u,
         tmp.tiles, tmp.ix, tmp.x, tmp.u
     );
+
 }
 
 __host__
@@ -790,40 +791,80 @@ void Particles::tile_sort() {
 }
 
 
+#define __ULIM __FLT_MAX__
+
 __global__
+/**
+ * @brief Checks particle buffer data for error
+ * 
+ * WARNING: This routine is meant for debug only and should not be called 
+ *          for production code.
+ * 
+ * The routine will check for:
+ *      1. Invalid cell data (out of tile bounds)
+ *      2. Invalid position data (out of [-0.5,0.5[)
+ *      3. Invalid momenta (nan, inf or above __ULIM macro value)
+ * 
+ * If there are any errors found the routine will exit the code.
+ * 
+ * @param tiles 
+ * @param d_ix 
+ * @param d_x 
+ * @param d_u 
+ * @param nx 
+ * @param over 
+ * @param out 
+ */
 void _validate( t_part_tile * tiles, 
     int2   const * const __restrict__ d_ix,
     float2 const * const __restrict__ d_x,
     float3 const * const __restrict__ d_u,
-    uint2 const nx, int * out ) {
+    uint2 const nx, int const over, int * out ) {
 
-    const int tid = blockIdx.y * gridDim.x + blockIdx.x;
+    int const tid = blockIdx.y * gridDim.x + blockIdx.x;
 
-    const int offset = tiles[ tid ].pos;
-    const int np     = tiles[ tid ].n;
+    int const offset = tiles[ tid ].pos;
+    int const np     = tiles[ tid ].n;
     int2   const * const __restrict__ ix = &d_ix[ offset ];
     float2 const * const __restrict__ x  = &d_x[ offset ];
-    
-    // float3 const * const __restrict__ u  = &d_u[ offset ];
+    float3 const * const __restrict__ u  = &d_u[ offset ];
+
+    int2 const lb = make_int2( -over, -over );
+    int2 const ub = make_int2( nx.x + over, nx.y + over ); 
 
     for( int i = threadIdx.x; i < np; i += blockDim.x) {
         int err = 0;
 
-        if ( ix[i].x < 0 || ix[i].x >= nx.x ) {
-            printf("(*error*) Invalid ix[%d].x position (%d), nx.x = %d\n", i, ix[i].x, nx.x );
+        if ( (ix[i].x < lb.x) || (ix[i].x >= ub.x )) {
+            printf("(*error*) Invalid ix[%d].x position (%d), range = [%d,%d]\n", i, ix[i].x, lb.x, ub.x );
             err = 1;
         }
-        if ( ix[i].y < 0 || ix[i].y >= nx.y ) {
-            printf("(*error*) Invalid ix[%d].y position (%d), nx.y = %d\n", i, ix[i].y, nx.y );
+        if ( (ix[i].y < lb.y) || (ix[i].y >= ub.y )) {
+            printf("(*error*) Invalid ix[%d].y position (%d), range = [%d,%d]\n", i, ix[i].y, lb.y, ub.y );
             err = 1;
         }
 
-        if ( x[i].x < 0 || x[i].x >= 1.0f ) {
-            printf("(*error*) Invalid x[%d].x position (%f)\n", i, x[i].x );
+        if ( isnan(u[i].x) || isinf(u[i].x) || fabsf(u[i].x) >= __ULIM ) {
+            printf("(*error*) Invalid u[%d].x gen. velocity (%f)\n", i, u[i].x );
             err = 1;
         }
-        if ( x[i].y < 0 || x[i].y >= 1.0f ) {
-            printf("(*error*) Invalid x[%d].y position (%f)\n", i, x[i].y );
+
+        if ( isnan(u[i].y) || isinf(u[i].y) || fabsf(u[i].x) >= __ULIM ) {
+            printf("(*error*) Invalid u[%d].y gen. velocity (%f)\n", i, u[i].y );
+            err = 1;
+        }
+
+        if ( isnan(u[i].z) || isinf(u[i].z) || fabsf(u[i].x) >= __ULIM ) {
+            printf("(*error*) Invalid u[%d].z gen. velocity (%f)\n", i, u[i].z );
+            err = 1;
+        }
+
+        if ( x[i].x < -0.5f || x[i].x >= 0.5f ) {
+            printf("(*error*) Invalid x[%d].x position (%f), range = [-0.5,0.5[\n", i, x[i].x );
+            err = 1;
+        }
+        if ( x[i].y < -0.5f || x[i].y >= 0.5f ) {
+            printf("(*error*) Invalid x[%d].y position (%f), range = [-0.5,0.5[\n", i, x[i].y );
             err = 1;
         }
 
@@ -834,24 +875,58 @@ void _validate( t_part_tile * tiles,
     }
 }
 
+#undef __ULIM
+
 __host__
 /**
  * @brief Checks if particle buffer data is correct
  * 
  */
-void Particles::validate( std::string msg ) {
+void Particles::validate( std::string msg, int const over ) {
 
     dim3 grid( ntiles.x, ntiles.y );
     dim3 block( 32 );
 
     device::Var<int> err(0);
 
-    _validate <<< grid, block >>> ( tiles, ix, x, u, nx, err.ptr() );
+    _validate <<< grid, block >>> ( tiles, ix, x, u, nx, over, err.ptr() );
 
     unsigned int nerr = err.get();
     if ( nerr > 0 ) {
-        std::cerr << "(*error*) " << msg;
+        std::cerr << "(*error*) " << msg << "\n";
         std::cerr << "(*error*) invalid particle, aborting...\n";
         exit(1);
     }
+}
+
+void Particles::validate( std::string msg ) {
+
+    validate( msg, 0 );
+
+}
+
+void Particles::check_tiles() {
+
+    ParticlesTile * h_tiles;
+    malloc_host( h_tiles, ntiles.x * ntiles.y );
+
+    devhost_memcpy( h_tiles, tiles, ntiles.x * ntiles.y );
+
+    int np = 0;
+    int max = 0;
+
+    for( int i = 0; i < ntiles.x * ntiles.y; i++ ) {
+        np += h_tiles[i].n;
+        if ( h_tiles[i].n > max ) max = h_tiles[i].n;
+    }
+
+    printf("(*info*) #part tile: %g (avg), %d (max), %d (lim)\n", 
+        float(np) / (ntiles.x * ntiles.y), max, max_np_tile );
+
+    if ( max >= 0.9 * max_np_tile ) {
+        printf("(*critical*) Buffer almost full!\n");
+        exit(1);
+    }
+
+    free_host( h_tiles );
 }
