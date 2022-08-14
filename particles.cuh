@@ -2,7 +2,7 @@
 #define __PARTICLES__
 
 #include "util.cuh"
-#include "tile_zdf.cuh"
+#include "zdf-cpp.h"
 
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
@@ -111,7 +111,7 @@ class Particles {
     void tile_sort( Particles &tmp );
 
     __host__
-    void save( t_zdf_part_info &info, t_zdf_iteration &iter, std::string path );
+    void save( zdf::part_info &info, zdf::iteration &iter, std::string path );
 
     __host__
     void check_tiles();

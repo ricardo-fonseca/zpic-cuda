@@ -1,5 +1,23 @@
 # ZPIC CUDA Development
 
+## 2022.8.14
+
+__MILESTONE:__ The code has successfully completed the Weibel simulation test.
+
+* Species class
+  * Fixes a critical issue with the trajectory splitter and out of plane current deposition (this issue was due to the change to [-0.5,.05[ positions)
+  * Fixes a critical issue with E field interpolation, again due to the change to [-0.5,.05[ positions
+  * Fixes issue with non-uniform particle injection. There was a block sync. operation missing before storing the total number of particles so some particles were being left out
+  * Fixes issue with sphere profile injection (was injecting a slab)
+* Implements new ZDF c++ interface, removing the `tile_zdf*` files
+  * The new interface, defined in the `zdf-cpp.h` file, puts C zdf declarations inside a namespace (`zdf::`), and exposes a minimal amount of types with new names (e.g. `zdf::file` corresponding to the C `t_zdf_file`)
+* Minor changes
+  * Timer class can now return timing information in other time units (s, ms, us, or ns)
+  * Renamed `VFLD` class `VectorField` class
+* visxd
+  * Add option to linearly scale data for `grid2d` plots, and other plot formatting options
+  * Adds new `vfield2d()` routine to plot the magnitude of a vector field
+
 ## 2022.8.13
 
 * Adds new top level Simulation class

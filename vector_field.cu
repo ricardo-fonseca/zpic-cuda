@@ -1,13 +1,12 @@
-#include "tile_vfld.cuh"
+#include "vector_field.cuh"
 #include <iostream>
 #include <string>
-#include "tile_zdf.cuh"
 
 #include "util.cuh"
 
 __host__
 /**
- * @brief Construct a new VFLD::VFLD object
+ * @brief Construct a new VectorField::VectorField object
  * 
  * Data is allocated only on the GPU (device). No data initialization is performed.
  * 
@@ -15,7 +14,7 @@ __host__
  * @param nx        Tile grid size
  * @param gc        Number of guard cells
  */
-VFLD::VFLD( uint2 const ntiles, uint2 const nx, uint2 const gc_[2]) :
+VectorField::VectorField( uint2 const ntiles, uint2 const nx, uint2 const gc_[2]) :
     ntiles( ntiles ), nx( nx )
 {
     gc[0] = gc_[0];
@@ -25,13 +24,13 @@ VFLD::VFLD( uint2 const ntiles, uint2 const nx, uint2 const gc_[2]) :
 }
 
 /**
- * @brief Construct a new VFLD::VFLD object without guard cells
+ * @brief Construct a new VectorField::VectorField object without guard cells
  * 
  * 
  * @param ntiles    Number of tiles
  * @param nx        Tile grid size
  */
-VFLD::VFLD( uint2 const ntiles, uint2 const nx ) :
+VectorField::VectorField( uint2 const ntiles, uint2 const nx ) :
     ntiles( ntiles ), nx( nx )
 {
     gc[0] = {0};
@@ -41,17 +40,17 @@ VFLD::VFLD( uint2 const ntiles, uint2 const nx ) :
 }
 
 /**
- * @brief VFLD destructor
+ * @brief VectorField destructor
  * 
  * Deallocates dynamic GPU memory
  */
 __host__
-VFLD::~VFLD() {
+VectorField::~VectorField() {
     free_dev( d_buffer );
 }
 
 /**
- * @brief zero host and device data on a vfld grid
+ * @brief zero host and device data on a VectorField grid
  * 
  * Note that the device data is zeroed using the `cudaMemset()` function that is
  * asynchronous with respect to the host.
@@ -59,7 +58,7 @@ VFLD::~VFLD() {
  * @return int       Returns 0 on success, -1 on error
  */
 __host__
-int VFLD::zero( ) {
+int VectorField::zero( ) {
 
     size_t size = buffer_size( ) * sizeof(float3);
 
@@ -76,7 +75,7 @@ int VFLD::zero( ) {
 
 
 /**
- * @brief CUDA kernel for vfld_set
+ * @brief CUDA kernel for VectorField_set
  * 
  * @param d_buffer      float3 Data buffer
  * @param val           float3 value to set
@@ -91,11 +90,11 @@ void _set_kernel( float3 * const __restrict__ d_buffer, float3 const val, size_t
 /**
  * @brief Sets host and device data to a constant value
  * 
- * @param vfld      Pointer to vfld variable
+ * @param VectorField      Pointer to VectorField variable
  * @param val       float3 value
  */
 __host__
-void VFLD :: set( const float3 val ) {
+void VectorField :: set( const float3 val ) {
 
     size_t const size = buffer_size( );
     int const block = 32;
@@ -105,7 +104,7 @@ void VFLD :: set( const float3 val ) {
 }
 
 /**
- * @brief CUDA kernel for VFLD::gather(x)
+ * @brief CUDA kernel for VectorField::gather(x)
  * 
  * @param out       Outuput float array
  * @param in        Input float3 tiled array (must include offset to position 0,0)
@@ -137,7 +136,7 @@ void _gather_kernelx(
 }
 
 /**
- * @brief CUDA kernel for VFLD::gather(y)
+ * @brief CUDA kernel for VectorField::gather(y)
  * 
  * @param out       Outuput float array
  * @param in        Input float3 tiled array (must include offset to position 0,0)
@@ -169,7 +168,7 @@ void _gather_kernely(
 }
 
 /**
- * @brief CUDA kernel for VFLD::gather(z)
+ * @brief CUDA kernel for VectorField::gather(z)
  * 
  * @param out       Outuput float array
  * @param in        Input float3 tiled array (must include offset to position 0,0)
@@ -206,12 +205,12 @@ void _gather_kernelz(
  * 
  * Used mostly for diagnostic output
  * 
- * @param vfld      Pointer to vfld variable
+ * @param VectorField      Pointer to VectorField variable
  * @param fc        Field component choice (1, 2 or 3)
  * @param data      Output buffer, must be pre-allocated
  */
 __host__
-int VFLD :: gather_host( const int fc, float * const __restrict__ h_data )
+int VectorField :: gather_host( const int fc, float * const __restrict__ h_data )
  {
 
     // Output data x, y dimensions
@@ -248,7 +247,7 @@ int VFLD :: gather_host( const int fc, float * const __restrict__ h_data )
     // Copy data to local buffer
     auto err = cudaMemcpy( h_data, d_data, size * sizeof(float), cudaMemcpyDeviceToHost );
     if ( err != cudaSuccess ) {
-        std::cerr << "(*error*) Unable to copy data back to cpu in vfld_gather()." << std::endl;
+        std::cerr << "(*error*) Unable to copy data back to cpu in VectorField_gather()." << std::endl;
         std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
         return -1;
     }
@@ -260,7 +259,7 @@ int VFLD :: gather_host( const int fc, float * const __restrict__ h_data )
 
 
 /**
- * @brief CUDA kernel for VFLD::add
+ * @brief CUDA kernel for VectorField::add
  * 
  * @param a     Pointer to object a data (in/out)
  * @param b     Pointer to object b data (in)
@@ -285,14 +284,14 @@ void _add_kernel(
 }
 
 /**
- * @brief Adds another VFLD object on top of local object
+ * @brief Adds another VectorField object on top of local object
  * 
  * Addition is done on device, data is not copied to CPU
  * 
  * @param rhs         Other object to add
- * @return VFLD&    Reference to local object
+ * @return VectorField&    Reference to local object
  */
-void VFLD::add( const VFLD &rhs )
+void VectorField::add( const VectorField &rhs )
 {
     size_t const size = buffer_size( );
     int const block = 32;
@@ -397,7 +396,7 @@ void _copy_gcy_kernel(
  * 
  */
 __host__
-void VFLD::copy_to_gc() {
+void VectorField::copy_to_gc() {
 
     uint2 ext = ext_nx();
 
@@ -525,7 +524,7 @@ void _add_gcy_kernel(
  * 
  */
 __host__
-void VFLD::add_from_gc()
+void VectorField::add_from_gc()
 {
     uint2 ext = ext_nx();
 
@@ -551,7 +550,7 @@ __host__
 * @param   iter        Iteration metadata
 * @param   path        Path where to save the file
 */
-int VFLD::save( const int fc, t_zdf_grid_info &info, t_zdf_iteration &iter, std::string path )
+int VectorField::save( const int fc, zdf::grid_info &info, zdf::iteration &iter, std::string path )
 {
 
     // Fill in grid dimensions
@@ -564,7 +563,7 @@ int VFLD::save( const int fc, t_zdf_grid_info &info, t_zdf_iteration &iter, std:
     malloc_host( h_data, info.count[0] * info.count[1] );
 
     if ( ! gather_host( fc, h_data ) )
-        zdf_save_grid( h_data, info, iter, path );
+        zdf::save_grid( h_data, info, iter, path );
 
     free_host( h_data );
 

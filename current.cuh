@@ -1,7 +1,7 @@
 #ifndef __CURRENT__
 #define __CURRENT__
 
-#include "tile_vfld.cuh"
+#include "vector_field.cuh"
 #include "util.cuh"
 
 class Current {
@@ -9,7 +9,7 @@ class Current {
     public:
 
     // Current density
-    VFLD * J;
+    VectorField * J;
             
     // Simulation box info
     float2 box;

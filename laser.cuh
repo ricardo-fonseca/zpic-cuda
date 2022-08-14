@@ -1,7 +1,7 @@
 #ifndef __LASER__
 #define __LASER__
 
-#include "tile_vfld.cuh"
+#include "vector_field.cuh"
 
 class Laser {
     public:
@@ -21,7 +21,7 @@ class Laser {
     __host__ Laser();
 
     __host__ virtual int validate();
-    __host__ virtual int launch( VFLD& E, VFLD& B, float2 box );
+    __host__ virtual int launch( VectorField& E, VectorField& B, float2 box );
 
 
     private :
@@ -39,7 +39,7 @@ class Gaussian : public Laser {
     float axis;
 
     __host__ int validate();
-    __host__ int launch( VFLD& E, VFLD& B, float2 box );
+    __host__ int launch( VectorField& E, VectorField& B, float2 box );
 };
 
 

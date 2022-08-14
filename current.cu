@@ -1,7 +1,7 @@
 #include "current.cuh"
 
 #include <iostream>
-#include "tile_zdf.cuh"
+
 
 __host__
 /**
@@ -32,7 +32,7 @@ Current::Current( uint2 const ntiles, uint2 const nx, float2 const box,
     // These are required for the Yee solver AND for field interpolation
     uint2 gc[2] = { make_uint2(1,1), make_uint2(2,2)}; 
 
-    J = new VFLD( ntiles, nx, gc );
+    J = new VectorField( ntiles, nx, gc );
 
     // Zero initial current
     // This is only relevant for diagnostics, current should always zeroed before deposition
@@ -104,8 +104,8 @@ void Current::save( fcomp::cart const jc ) {
     snprintf(vfname,16,"J%c",comp[jc]);
     snprintf(vflabel,16,"J_%c",comp[jc]);
 
-    t_zdf_grid_axis axis[2];
-    axis[0] = (t_zdf_grid_axis) {
+    zdf::grid_axis axis[2];
+    axis[0] = (zdf::grid_axis) {
     	.name = (char *) "x",
     	.min = 0.0,
     	.max = box.x,
@@ -113,7 +113,7 @@ void Current::save( fcomp::cart const jc ) {
     	.units = (char *) "c/\\omega_n"
     };
 
-    axis[1] = (t_zdf_grid_axis) {
+    axis[1] = (zdf::grid_axis) {
         .name = (char *) "y",
     	.min = 0.0,
     	.max = box.y,
@@ -121,7 +121,7 @@ void Current::save( fcomp::cart const jc ) {
     	.units = (char *) "c/\\omega_n"
     };
 
-    t_zdf_grid_info info = {
+    zdf::grid_info info = {
         .name = vfname,
     	.ndims = 2,
     	.label = vflabel,
@@ -132,7 +132,7 @@ void Current::save( fcomp::cart const jc ) {
     info.count[0] = J -> ntiles.x * J -> nx.x;
     info.count[1] = J -> ntiles.y * J -> nx.y;
 
-    t_zdf_iteration iteration = {
+    zdf::iteration iteration = {
     	.n = iter,
     	.t = iter * dt,
     	.time_units = (char *) "1/\\omega_p"

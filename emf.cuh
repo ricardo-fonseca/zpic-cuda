@@ -1,7 +1,7 @@
 #ifndef __EMF__
 #define __EMF__
 
-#include "tile_vfld.cuh"
+#include "vector_field.cuh"
 #include "laser.cuh"
 #include "current.cuh"
 #include "util.cuh"
@@ -14,8 +14,8 @@ class EMF {
     public:
 
     // Electric and magnetic fields
-    VFLD* E;
-    VFLD* B;
+    VectorField* E;
+    VectorField* B;
 
     // Simulation box info
     float2 box;

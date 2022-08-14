@@ -1,14 +1,14 @@
-#ifndef __TILE_VFLD__
-#define __TILE_VFLD__
+#ifndef __VECTOR_FIELD__
+#define __VECTOR_FIELD__
 
 #include <cstddef>
-#include "tile_zdf.cuh"
+#include "zdf-cpp.h"
 
 /**
- * @brief VFLD class
+ * @brief VectorField class
  * 
  */
-class VFLD {
+class VectorField {
 
     private:
 
@@ -21,9 +21,9 @@ class VFLD {
     uint2 nx;            // Tile grid size
     uint2 gc[2];         // Tile guard cells
 
-    __host__ VFLD( uint2 const ntiles, uint2 const nx, uint2 const gc[2]);
-    __host__ VFLD( uint2 const ntiles, uint2 const nx );
-    __host__ ~VFLD();
+    __host__ VectorField( uint2 const ntiles, uint2 const nx, uint2 const gc[2]);
+    __host__ VectorField( uint2 const ntiles, uint2 const nx );
+    __host__ ~VectorField();
 
     __host__ int zero();
 
@@ -33,7 +33,7 @@ class VFLD {
         set(val);
         return val;
     }
-    __host__ void add( const VFLD &rhs );
+    __host__ void add( const VectorField &rhs );
 
     __host__ 
     int gather_host( const int fc, float * const __restrict__ h_data );
@@ -128,7 +128,7 @@ class VFLD {
     * @param   iteration   Iteration metadata
     * @param   path        Path where to save the file
      */
-    int save( const int fc, t_zdf_grid_info &info, t_zdf_iteration &iter, std::string path );
+    int save( const int fc, zdf::grid_info &info, zdf::iteration &iter, std::string path );
 };
 
 #endif

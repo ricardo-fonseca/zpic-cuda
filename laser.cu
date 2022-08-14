@@ -160,7 +160,7 @@ void _plane_wave_kernel( Laser laser,
  * @return      Returns 0 on success, -1 on error (invalid laser parameters)
  */
 __host__
-int Laser::launch( VFLD& E, VFLD& B, float2 box ) {
+int Laser::launch( VectorField& E, VectorField& B, float2 box ) {
 
     std::cout << "(*info*) Launching plane wave, omega0 = " << omega0 << std::endl;
 
@@ -461,7 +461,7 @@ void _div_corr_x_kernel_C(
  * @param B 
  * @param dx 
  */
-void div_corr_x(VFLD& E, VFLD& B, float2 const dx )
+void div_corr_x(VectorField& E, VectorField& B, float2 const dx )
 {
 
     // A. Get accumulated E and B x divergence at the left edge of each
@@ -541,7 +541,7 @@ void div_corr_x(VFLD& E, VFLD& B, float2 const dx )
  * @return      Returns 0 on success, -1 on error (invalid laser parameters)
  */
 __host__
-int Gaussian::launch(VFLD& E, VFLD& B, float2 const box ) {
+int Gaussian::launch(VectorField& E, VectorField& B, float2 const box ) {
 
     if ( validate() < 0 ) return -1;
 

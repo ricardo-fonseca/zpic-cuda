@@ -83,6 +83,9 @@ void test_emf() {
  * 
  */
 void test_sort_deposit() {
+    
+    std::cout << "Running sort/deposit test...\n";
+    
     Timer timer;
 
     uint2 ntiles = {16, 16};
@@ -94,15 +97,19 @@ void test_sort_deposit() {
     Current current( ntiles, nx, box, dt );
 
     uint2 ppc = {8,8};
-    //float3 ufl = {1.0, 2.0, 3.0};
-    // float3 uth = {0.1, 0.2, 0.3};
-    float3 ufl = {1000., 1000., 1000.};
     float3 uth = {0};
+
+//    float3 ufl = {1000.,    0.,    0.};
+//    float3 ufl = {   0., 1000.,    0.};
+    float3 ufl = {   0.,    0., 1000.};
+//    float3 ufl = {1000., 1000., 1000.};
 
     Species electrons( "electrons", -1, ppc, 1.0, box, ntiles, nx, dt );
 
 
-    electrons.inject_particles( density::sphere( make_float2(9.6,16.0), 3.2) );
+    // electrons.inject_particles( density::uniform() );
+    electrons.inject_particles( density::sphere( make_float2(12.8,12.8), 3.2) );
+    // electrons.inject_particles( density::slab( 9.6,16.0 ) );
     electrons.set_u( uth, ufl );
 
     current.save( fcomp:: x );
@@ -115,15 +122,23 @@ void test_sort_deposit() {
     timer.start();
 
     int iter = 0;
-    int iter_max = 100;
+    int iter_max = 10;
     while( iter < iter_max ) {
         printf(" i = %3d, t = %g \n", iter, iter * dt );
 
         current.zero();
 
         electrons.move( current.J );
+        electrons.particles->tile_sort();
+        electrons.iter++;
 
         current.advance();
+
+        electrons.save_charge();
+
+        current.save( fcomp:: x );
+        current.save( fcomp:: y );
+        current.save( fcomp:: z );
 
         iter++;
     }
@@ -131,10 +146,6 @@ void test_sort_deposit() {
     printf(" i = %3d, t = %g (finished)\n", iter, iter * dt );
 
     timer.stop();
-
-    current.save( fcomp:: x );
-    current.save( fcomp:: y );
-    current.save( fcomp:: z );
 
     electrons.save();
     electrons.save_charge();
@@ -164,9 +175,9 @@ void test_weibel() {
     sim.add_species( "positrons", +1.0f, ppc, 1.0f, density::uniform(), uth, ufl );
 
     // Run simulation
-    int const imax = 500;
+    float const imax = 500;
 
-    printf("Running simulation up to i = %d...\n", imax );
+    printf("Running Weibel test up to n = %g...\n", imax );
 
     Timer timer;
 
@@ -181,6 +192,9 @@ void test_weibel() {
 
     printf("Simulation complete at i = %d\n", sim.get_iter());
     
+    sim.current -> save( fcomp::x );
+    sim.current -> save( fcomp::y );
+    sim.current -> save( fcomp::z );
 
     sim.emf -> save( emf::e, fcomp::x );
     sim.emf -> save( emf::e, fcomp::y );
@@ -190,7 +204,7 @@ void test_weibel() {
     sim.emf -> save( emf::b, fcomp::y );
     sim.emf -> save( emf::b, fcomp::z );
 
-    printf("Elapsed time was: %.3f ms\n", timer.elapsed());
+    printf("Elapsed time was: %.3f s\n", timer.elapsed( timer::s ));
 }
 
 

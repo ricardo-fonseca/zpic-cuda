@@ -53,7 +53,7 @@ namespace density {
     }
 
     static inline parameters sphere( float2 const center, float const radius ) { 
-        parameters d = { .type = type::slab, .pos = center, .radius = radius };
+        parameters d = { .type = type::sphere, .pos = center, .radius = radius };
         return d;
     }
 }
@@ -88,11 +88,10 @@ private:
     // Time step
     float dt;
 
+public:
+
     // Iteration
     int iter;
-
-
-public:
 
     // Species name
     std::string name;
@@ -150,10 +149,10 @@ public:
     void save_charge() const;
 
     __host__
-    void push( VFLD * const E, VFLD * const B );
+    void push( VectorField * const E, VectorField * const B );
 
     __host__
-    void move( VFLD * const current );
+    void move( VectorField * const current );
 
     __host__
     void move( );

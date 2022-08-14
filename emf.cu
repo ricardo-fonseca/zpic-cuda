@@ -1,6 +1,5 @@
 #include "emf.cuh"
 #include <iostream>
-#include "tile_zdf.cuh"
 
 #include <cooperative_groups.h>
 namespace cg=cooperative_groups;
@@ -25,8 +24,8 @@ EMF::EMF( uint2 const ntiles, uint2 const nx, float2 const box,
     // These are required for the Yee solver AND for field interpolation
     uint2 gc[2] = { make_uint2(1,1), make_uint2(2,2) }; 
 
-    E = new VFLD( ntiles, nx, gc );
-    B = new VFLD( ntiles, nx, gc );
+    E = new VectorField( ntiles, nx, gc );
+    B = new VectorField( ntiles, nx, gc );
 
     // Zero fields
     E -> zero();
@@ -235,17 +234,15 @@ void yeeJ_e(
         const int i = idx % ( nx.x + 2 );   // range is 0 to nx+1
         const int j = idx / ( nx.x + 2 );
 
-        float3 const curr = J[ i + j * stride_J ];
-
         E[i+j*stride].x += ( + dt_dy * ( B[i+j*stride].z - B[i+(j-1)*stride].z) ) 
-                            - dt * curr.x;
+                             - dt * J[i+j*stride_J].x;
         
         E[i+j*stride].y += ( - dt_dx * ( B[i+j*stride].z - B[(i-1)+j*stride].z) )
-                            - dt * curr.y;
+                             - dt * J[i+j*stride_J].y;
 
         E[i+j*stride].z += ( + dt_dx * ( B[i+j*stride].y - B[(i-1)+j*stride].y) - 
                                dt_dy * ( B[i+j*stride].x - B[i+(j-1)*stride].x) )
-                            - dt * curr.z;
+                             - dt * J[i+j*stride_J].z;
     }
 }
 
@@ -356,8 +353,8 @@ void EMF::add_laser( Laser& laser ){
 
     std::cout << "(*info*) Adding laser..." << std::endl;
 
-    VFLD tmp_E( E -> g_nx(), E-> nx, E -> gc );
-    VFLD tmp_B( E -> g_nx(), B-> nx, B -> gc );
+    VectorField tmp_E( E -> g_nx(), E-> nx, E -> gc );
+    VectorField tmp_B( E -> g_nx(), B-> nx, B -> gc );
 
     // Get laser fields
     laser.launch( tmp_E, tmp_B, box );
@@ -387,7 +384,7 @@ void EMF::save( const emf::field field, fcomp::cart const fc ) {
     }
 
     // Choose field to save
-    VFLD * f;
+    VectorField * f;
     switch (field) {
         case emf::e :
             f = E;
@@ -404,8 +401,8 @@ void EMF::save( const emf::field field, fcomp::cart const fc ) {
         return;
     }
 
-    t_zdf_grid_axis axis[2];
-    axis[0] = (t_zdf_grid_axis) {
+    zdf::grid_axis axis[2];
+    axis[0] = (zdf::grid_axis) {
     	.name = (char *) "x",
     	.min = 0.0,
     	.max = box.x,
@@ -413,7 +410,7 @@ void EMF::save( const emf::field field, fcomp::cart const fc ) {
     	.units = (char *) "c/\\omega_n"
     };
 
-    axis[1] = (t_zdf_grid_axis) {
+    axis[1] = (zdf::grid_axis) {
         .name = (char *) "y",
     	.min = 0.0,
     	.max = box.y,
@@ -421,7 +418,7 @@ void EMF::save( const emf::field field, fcomp::cart const fc ) {
     	.units = (char *) "c/\\omega_n"
     };
 
-    t_zdf_grid_info info = {
+    zdf::grid_info info = {
         .name = vfname,
     	.ndims = 2,
     	.label = vflabel,
@@ -433,7 +430,7 @@ void EMF::save( const emf::field field, fcomp::cart const fc ) {
     info.count[1] = E -> ntiles.y * E -> nx.y;
 
 
-    t_zdf_iteration iteration = {
+    zdf::iteration iteration = {
     	.n = iter,
     	.t = iter * dt,
     	.time_units = (char *) "1/\\omega_p"

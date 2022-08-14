@@ -11,7 +11,7 @@
 
 #include "species.cuh"
 #include <iostream>
-#include "tile_zdf.cuh"
+
 #include "timer.cuh"
 #include "random.cuh"
 
@@ -34,7 +34,7 @@ namespace cg = cooperative_groups;
 inline __device__
 float rgamma( const float3 u ) {
     // Standard implementation
-    // return 1.0f/sqrtf( u.z*u.z + u.y*u.y + u.x*u.x + 1.0f );
+    // return 1.0f/sqrtf( u.z*u.z + ( u.y*u.y + ( u.x*u.x + 1.0f ) ) );
 
     // Using CUDA rsqrt and fma intrinsics
     return rsqrtf( fmaf( u.z, u.z, fmaf( u.y, u.y, fmaf( u.x, u.x, 1.0f ) ) ) );
@@ -55,9 +55,9 @@ float rgamma( const float3 u ) {
  */
 Species::Species( std::string const name, float const m_q, uint2 const ppc, float const n0,
         float2 const box, uint2 const ntiles, uint2 const nx, const float dt ) :
-        name{name}, m_q{m_q}, ppc{ppc}, box{box}, dt{dt}
+        name(name), m_q(m_q), ppc(ppc), n0( fabsf(n0) ), box(box), dt(dt)
 {
-    q = copysign( fabs(n0), m_q ) / (ppc.x * ppc.y);
+    q = copysign( n0, m_q ) / (ppc.x * ppc.y);
     dx.x = box.x / (nx.x * ntiles.x);
     dx.y = box.y / (nx.y * ntiles.y);
 
@@ -71,9 +71,6 @@ Species::Species( std::string const name, float const m_q, uint2 const ppc, floa
 
     // Reset iteration numbers
     iter = 0;
-
-    std::cout << "(*info*) Species " << name << " initialized.\n";
-    std::cout << "(*info*) " << name << " : q = " << q << "\n";
 }
 
 /**
@@ -250,7 +247,8 @@ void _inject_step_kernel(
                     dpcx * ( i0 + 0.5 ) - 0.5,
                     dpcy * ( i1 + 0.5 ) - 0.5
                 );
-                if ( shiftx + cell.x + pos.x > step ) {
+                auto t = (shiftx + cell.x) + (pos.x + 0.5);
+                if ( t > step ) {
                     const int k = atomicAdd( &np, 1 );
                     ix[ k ] = cell;
                     x[ k ] = pos;
@@ -259,6 +257,8 @@ void _inject_step_kernel(
             }
         }
     }
+
+    __syncthreads();
 
     if ( threadIdx.x == 0 )
         d_tiles[ tid ].n = np;
@@ -279,7 +279,7 @@ void _inject_step_kernel(
  */
 __global__
 void _inject_slab_kernel(
-    float2 slab, uint2 ppc, uint2 nx,
+    const float start, const float finish, uint2 ppc, uint2 nx,
     t_part_tile * const __restrict__ d_tiles,
     int2* __restrict__ d_ix, float2* __restrict__ d_x, float3* __restrict__ d_u
 ) {
@@ -310,8 +310,8 @@ void _inject_slab_kernel(
                     dpcx * ( i0 + 0.5 ) - 0.5,
                     dpcy * ( i1 + 0.5 ) - 0.5
                 );
-                if ( shiftx + cell.x + pos.x > slab.x &&
-                        shiftx + cell.x + pos.x < slab.y ) {
+                auto t = (shiftx + cell.x) + (pos.x + 0.5);
+                if ((t > start) && (t<finish )) {
                     const int k = atomicAdd( &np, 1 );
                     ix[ k ] = cell;
                     x[ k ] = pos;
@@ -320,6 +320,8 @@ void _inject_slab_kernel(
             }
         }
     }
+
+    __syncthreads();
 
     if ( threadIdx.x == 0 )
         d_tiles[ tid ].n = np;
@@ -375,8 +377,8 @@ void _inject_sphere_kernel(
                     dpcx * ( i0 + 0.5 ) - 0.5,
                     dpcy * ( i1 + 0.5 ) - 0.5
                 );
-                float gx = (shiftx + cell.x + pos.x) * dx.x;
-                float gy = (shifty + cell.y + pos.y) * dx.y;
+                float gx = ((shiftx + cell.x) + (pos.x+0.5)) * dx.x;
+                float gy = ((shifty + cell.y) + (pos.y+0.5)) * dx.y;
                 
                 if ( (gx - center.x)*(gx - center.x) + (gy - center.y)*(gy - center.y) < r2 ) {
                     const int k = atomicAdd( &np, 1 );
@@ -387,6 +389,8 @@ void _inject_sphere_kernel(
             }
         }
     }
+
+    __syncthreads();
 
     if ( threadIdx.x == 0 )
         d_tiles[ tid ].n = np;
@@ -408,37 +412,24 @@ void Species::inject_particles( density::parameters const & d ) {
     case density::type::uniform:
         _inject_uniform_kernel <<< grid, block >>> ( 
             ppc, particles -> nx, 
-            particles -> tiles, particles -> ix, particles -> x, particles -> u 
-        );
+            particles -> tiles, particles -> ix, particles -> x, particles -> u );
         break;
     case density::type::step:
-        {
-            float step = d.pos.x / dx.x;
-            _inject_step_kernel <<< grid, block >>> (
-                step, ppc, particles -> nx, 
-                particles -> tiles, particles -> ix, particles -> x, particles -> u 
-            );
-        }
+        _inject_step_kernel <<< grid, block >>> (
+            d.pos.x / dx.x, ppc, particles -> nx, 
+            particles -> tiles, particles -> ix, particles -> x, particles -> u );
         break;
     case density::type::slab:
-        {
-            float2 slab = make_float2( d.pos.x / dx.x, d.pos.y / dx.x );
-            _inject_slab_kernel <<< grid, block >>> (
-                slab, ppc, particles -> nx, 
-                particles -> tiles,
-                particles -> ix, particles -> x, particles -> u 
-            );
-        }
+        _inject_slab_kernel <<< grid, block >>> (
+            d.pos.x / dx.x, d.pos.y / dx.x, ppc, particles -> nx, 
+            particles -> tiles,
+            particles -> ix, particles -> x, particles -> u  );
         break;
     case density::type::sphere:
-        {
-            float2 center = d.pos;
-            float radius = d.radius;
-            _inject_sphere_kernel <<< grid, block >>> (
-                center, radius, dx, ppc, particles -> nx, 
-                particles -> tiles, particles -> ix, particles -> x, particles -> u 
-            );
-        };
+        _inject_sphere_kernel <<< grid, block >>> (
+            d.pos, d.radius, dx, ppc, particles -> nx, 
+            particles -> tiles, particles -> ix, particles -> x, particles -> u  );
+        break;
     }
 }
 
@@ -470,7 +461,7 @@ __device__
  * @param ix        Particle cell
  * @param x0        Initial particle position
  * @param x1        Final particle position
- * @param deltax    Particle motion
+ * @param delta     Particle motion
  * @param qnx       Normalization values for in plane current deposition
  * @param qvz       Out of plane current
  * @param J         current(J) grid (should be in shared memory)
@@ -531,14 +522,13 @@ __device__
  */
 void _dep_current_split_y( const int2 ix,
     const float2 x0, const float2 x1, const float2 delta,
-    const float2 qnx, const float qvz_2,
+    const float2 qnx, const float qvz,
     float3 * __restrict__ J, const int stride )
 {
-
     const int diy = ( x1.y >= 0.5f ) - ( x1.y < -0.5f );
     if ( diy == 0 ) {
         // No more splits
-        _dep_current_seg( ix, x0, x1, delta, qnx, qvz_2, J, stride );
+        _dep_current_seg( ix, x0, x1, delta, qnx, qvz, J, stride );
     } else {
         const float yint = 0.5f * diy;
         const float eps  = ( yint - x0.y ) / delta.y;
@@ -550,15 +540,15 @@ void _dep_current_split_y( const int2 ix,
             x0,
             make_float2( xint, yint ), 
             make_float2( xint - x0.x, yint - x0.y ),  
-            qnx, qvz_2 * eps, J, stride );
+            qnx, qvz * eps, J, stride );
 
         // Second segment
         _dep_current_seg( 
             make_int2  ( ix.x,        ix.y + diy), 
             make_float2( xint,        - yint ),
             make_float2( x1.x, x1.y   - diy),
-            make_float2( x1.x - xint, x1.y + yint ),
-            qnx, qvz_2 * (1-eps), J, stride );
+            make_float2( x1.x - xint, x1.y - yint ),
+            qnx, qvz * (1-eps), J, stride );
     }
 }
 
@@ -610,14 +600,14 @@ void _move_deposit_kernel(
 
     for( int i = threadIdx.x; i < np; i+= blockDim.x ) {
         float3 pu = u[i];
-        float2 x0 = x[i];
-        int2 ix0 =ix[i];
+        float2 const x0 = x[i];
+        int2   const ix0 =ix[i];
 
         // Get 1 / Lorentz gamma
-        float rg = rgamma( pu );
+        float const rg = rgamma( pu );
 
         // Get particle motion
-        float2 delta = make_float2(
+        float2 const delta = make_float2(
             dt_dx.x * rg * pu.x,
             dt_dx.y * rg * pu.y
         );
@@ -629,17 +619,17 @@ void _move_deposit_kernel(
         );
 
         // Check for cell crossings
-        int2 deltai = make_int2(
+        int2 const deltai = make_int2(
             ((x1.x >= 0.5f) - (x1.x < -0.5f)),
             ((x1.y >= 0.5f) - (x1.y < -0.5f))
         );
 
         // Deposit current
         {
-            float qvz_2 = q * pu.z * rg * 0.5f;
+            float qvz = q * pu.z * rg * 0.5f;
             if ( deltai.x == 0 ) {
                 // No x splits
-                _dep_current_split_y( ix0, x0, x1, delta, qnx, qvz_2, J, stride );
+                _dep_current_split_y( ix0, x0, x1, delta, qnx, qvz, J, stride );
             } else {
                 // Split x current into 2 segments
                 const float xint = 0.5f * deltai.x;
@@ -652,7 +642,7 @@ void _move_deposit_kernel(
                     x0, 
                     make_float2( xint, yint ),
                     make_float2( xint - x0.x, yint - x0.y ), 
-                    qnx, qvz_2 * eps, J, stride );
+                    qnx, qvz * eps, J, stride );
 
                 // Second segment
 
@@ -663,8 +653,8 @@ void _move_deposit_kernel(
                     make_int2( ix0.x + deltai.x, ix0.y + diycross) , 
                     make_float2( -xint,           yint - diycross),
                     make_float2( x1.x - deltai.x, x1.y - diycross ), 
-                    make_float2( x1.x + xint, (x1.y - yint) - diycross ),
-                    qnx, qvz_2 * (1 - eps), J, stride );
+                    make_float2( x1.x - xint, (x1.y - yint) - diycross ),
+                    qnx, qvz * (1 - eps), J, stride );
             }
         }
 
@@ -702,7 +692,7 @@ __host__
  * 
  * @param current   Current grid
  */
-void Species::move( VFLD * J )
+void Species::move( VectorField * J )
 {
     const float2 dt_dx = make_float2(
         dt / dx.x,
@@ -724,7 +714,6 @@ void Species::move( VFLD * J )
         particles -> ix, particles -> x, particles -> u,
         J -> d_buffer, J -> offset(), ext_nx, dt_dx, q, qnx
     );
-
 }
 
 __global__
@@ -952,8 +941,8 @@ void interpolate_fld(
     e.y = ( E[i  +     jh*stride].y * s0x  + E[i+1  +     jh*stride].y * s1x ) * s0yh +
           ( E[i  + (jh+1)*stride].y * s0x  + E[i+1  + (jh+1)*stride].y * s1x ) * s1yh;
 
-    e.z = ( E[i  +     j *stride].z * s0x  + E[i+1  +     j*stride].z * s1x ) * s0yh +
-          ( E[i  + (j +1)*stride].z * s0x  + E[i+1  + (j+1)*stride].z * s1x ) * s1yh;
+    e.z = ( E[i  +     j *stride].z * s0x  + E[i+1  +     j*stride].z * s1x ) * s0y +
+          ( E[i  + (j +1)*stride].z * s0x  + E[i+1  + (j+1)*stride].z * s1x ) * s1y;
 
     // Interpolate B field
     b.x = ( B[i  +     jh*stride].x * s0x + B[i+1  +     jh*stride].x * s1x ) * s0yh +
@@ -1040,7 +1029,7 @@ __host__
  * @param E     Electric field
  * @param B     Magnetic field
  */
-void Species::push( VFLD * const E, VFLD * const B )
+void Species::push( VectorField * const E, VectorField * const B )
 {
     const float2 dt_dx = {
         dt / dx.x,
@@ -1184,14 +1173,14 @@ void Species::save( ) const {
         "c","c","c"
     };
 
-    t_zdf_iteration iter_info = {
+    zdf::iteration iter_info = {
         .n = iter,
         .t = iter * dt,
         .time_units = (char *) "1/\\omega_p"
     };
 
     // Omit number of particles, this will be filled in later
-    t_zdf_part_info info = {
+    zdf::part_info info = {
         .name = (char *) name.c_str(),
         .label = (char *) name.c_str(),
         .nquants = 5,
@@ -1226,8 +1215,8 @@ void Species::save_charge() const {
     charge.add_from_gc();
 
     // Prepare file info
-    t_zdf_grid_axis axis[2];
-    axis[0] = (t_zdf_grid_axis) {
+    zdf::grid_axis axis[2];
+    axis[0] = (zdf::grid_axis) {
         .name = (char *) "x",
         .min = 0.,
         .max = box.x,
@@ -1235,7 +1224,7 @@ void Species::save_charge() const {
         .units = (char *) "c/\\omega_p"
     };
 
-    axis[1] = (t_zdf_grid_axis) {
+    axis[1] = (zdf::grid_axis) {
         .name = (char *) "y",
         .min = 0.,
         .max = box.y,
@@ -1246,14 +1235,14 @@ void Species::save_charge() const {
     std::string grid_name = name + "-charge";
     std::string grid_label = name + " \\rho";
 
-    t_zdf_grid_info info = {
+    zdf::grid_info info = {
         .name = (char *) grid_name.c_str(),
         .label = (char *) grid_label.c_str(),
         .units = (char *) "n_e",
         .axis  = axis
     };
 
-    t_zdf_iteration iter_info = {
+    zdf::iteration iter_info = {
         .name = (char *) "ITERATION",
         .n = iter,
         .t = iter * dt,

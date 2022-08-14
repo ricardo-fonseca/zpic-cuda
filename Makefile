@@ -2,7 +2,7 @@ NVCC = nvcc
 CFLAGS = -O3
 LDFLAGS =
  
-SOURCE = field.cu particles.cu tile_vfld.cu tile_zdf.cu \
+SOURCE = field.cu vector_field.cu particles.cu \
          emf.cu laser.cu current.cu species.cu \
          main.cu
 

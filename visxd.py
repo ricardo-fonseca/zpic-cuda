@@ -8,7 +8,8 @@ import matplotlib.colors as colors
 
 import numpy as np
 
-def grid2d( filename, xlim = None, ylim = None, grid = False, cmap = None, vsim = False ):
+def grid2d( filename, xlim = None, ylim = None, grid = False, cmap = None,
+    vsim = False, vmin = None, vmax = None, scale = None ):
     """Generates a colormap plot from a 2D grid zdf file
 
     Args:
@@ -51,16 +52,22 @@ def grid2d( filename, xlim = None, ylim = None, grid = False, cmap = None, vsim 
         [info.grid.axis[1].min, info.grid.axis[1].max]
     ]
 
+    # Linearly scale data if requested
+    if ( scale ):
+        data = data * scale[0] + scale[1]
+
     if ( vsim ):
         amax = np.amax( np.abs(data) )
         plt.imshow( data, interpolation = 'nearest', origin = 'lower',
-                vmin = -amax, vmax = +amax,
-                extent = ( range[0][0], range[0][1], range[1][0], range[1][1] ),
-                aspect = 'auto', cmap=cmap )
+            vmin = -amax, vmax = +amax,
+            extent = ( range[0][0], range[0][1], range[1][0], range[1][1] ),
+            aspect = 'auto', cmap=cmap )
     else:
         plt.imshow( data, interpolation = 'nearest', origin = 'lower',
-                extent = ( range[0][0], range[0][1], range[1][0], range[1][1] ),
-                aspect = 'auto', cmap=cmap )
+            vmin = vmin, vmax = vmax, 
+            # norm=colors.SymLogNorm( vmin = vmin, vmax = vmax, linthresh = 0.0001 ),
+            extent = ( range[0][0], range[0][1], range[1][0], range[1][1] ),
+            aspect = 'auto', cmap=cmap )
 
     zlabel = "{}\,[{:s}]".format( info.grid.label, info.grid.units )
 
@@ -76,6 +83,118 @@ def grid2d( filename, xlim = None, ylim = None, grid = False, cmap = None, vsim 
         info.grid.label.replace(" ","\;"),
         info.iteration.t,
         info.iteration.tunits))
+
+    if ( xlim ):
+        plt.xlim(xlim)
+    if ( ylim ):
+        plt.ylim(ylim)
+
+    plt.grid(grid)
+
+    plt.show()
+
+def vfield2d( filex, filey, xlim = None, ylim = None, grid = False, cmap = None, vmin = 0, vmax = None, title = None ):
+    """Generates a colormap plot 
+
+    Args:
+        filex (str):
+            Name of ZDF file to open for the x field component
+        filey (str):
+            Name of ZDF file to open for the y field component
+        xlim (tuple, optional):
+            Lower and upper limits of x axis. Defaults to the x limits of the
+            grid data.
+        ylim (tuple, optional):
+            Lower and upper limits of y axis. Defaults to the y limits of the
+            grid data.
+        grid (bool, optional):
+            Display a grid on top of colormap. Defaults to False.
+        cmap (str, optional):
+            Name of the colormap to use. Defaults to the matplotlib imshow() 
+            colormap.
+        vsim:
+            Setup a symmetric value scale [ -max(|val|), max(|val|) ]. Defaults to setting
+            the value scale to [ min, max ]
+
+    """
+
+    if (( not os.path.exists(filex) ) or ( not os.path.exists(filey) )):
+        print("(*error*) files missing:")
+        if ( not os.path.exists(filex) ):
+            print("(*error*) file {} not found.".format(filex), file = sys.stderr )
+        if ( not os.path.exists(filey) ):
+            print("(*error*) file {} not found.".format(filey), file = sys.stderr )
+        return
+
+    if ( filex == filey ):
+        print("(*error*) the 2 files are the same: {}".format(filex), file = sys.stderr )
+        return
+
+    # Check filex
+    infox = zdf.info(filex)
+
+    if ( infox.type != "grid" ):
+        print("(*error*) file {} is not a grid file".format(filex))
+        return
+    
+    if ( infox.grid.ndims != 2 ):
+        print("(*error*) file {} is not a 2D grid file".format(filex))
+        return
+
+    range = [
+        [infox.grid.axis[0].min, infox.grid.axis[0].max],
+        [infox.grid.axis[1].min, infox.grid.axis[1].max]
+    ]
+
+    # Check filey
+    infoy = zdf.info(filey)
+
+    if ( infoy.type != "grid" ):
+        print("(*error*) file {} is not a grid file".format(filey))
+        return
+    
+    if ( infoy.grid.ndims != 2 ):
+        print("(*error*) file {} is not a 2D grid file".format(filey))
+        return
+
+    if (( infox.grid.nx[0] != infoy.grid.nx[0] ) or
+        ( infox.grid.nx[1] != infoy.grid.nx[1] )):
+        print("(*error*) files {} / {} don't have the same grid dimensions".format(filex, filey))
+        return
+
+    # Everything seems ok proceed
+
+    (datax, infox) = zdf.read( filex )
+    (datay, infoy) = zdf.read( filey )
+
+    range = [
+        [infox.grid.axis[0].min, infox.grid.axis[0].max],
+        [infox.grid.axis[1].min, infox.grid.axis[1].max]
+    ]
+
+    data = np.sqrt( np.square( datax ) + np.square( datay ) )
+
+    plt.imshow( data, interpolation = 'nearest', origin = 'lower',
+            extent = ( range[0][0], range[0][1], range[1][0], range[1][1] ),
+            aspect = 'auto', cmap=cmap, vmin = vmin, vmax = vmax )
+
+    if ( not title ):
+        title = '\sqrt{' + infox.grid.label + '^2 + ' + infoy.grid.label + '^2 }'
+
+    zlabel = "{}\;[{:s}]".format( title, infox.grid.units )
+
+    plt.colorbar().set_label(r'$\sf{' + zlabel + r'}$')
+
+    xlabel = "{}\,[{:s}]".format( infox.grid.axis[0].label, infox.grid.axis[0].units )
+    ylabel = "{}\,[{:s}]".format( infox.grid.axis[1].label, infox.grid.axis[1].units )
+
+    plt.xlabel(r'$\sf{' + xlabel + r'}$')
+    plt.ylabel(r'$\sf{' + ylabel + r'}$')
+
+    plt.title("$\sf {} $\nt = ${:g}$ [$\sf {}$]".format(
+        title.replace(" ","\;"),
+        infox.iteration.t,
+        infox.iteration.tunits))
 
     if ( xlim ):
         plt.xlim(xlim)

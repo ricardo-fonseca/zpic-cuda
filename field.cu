@@ -446,7 +446,7 @@ void Field::add_from_gc() {
  * 
  */
 __host__
-void Field::save( t_zdf_grid_info &info, t_zdf_iteration &iter, std::string path ) {
+void Field::save( zdf::grid_info &info, zdf::iteration &iter, std::string path ) {
 
     // Fill in grid dimensions
     info.ndims = 2;
@@ -458,7 +458,7 @@ void Field::save( t_zdf_grid_info &info, t_zdf_iteration &iter, std::string path
     malloc_host( h_data, info.count[0] * info.count[1] );
 
     if ( ! gather_host( h_data ) )
-        zdf_save_grid( h_data, info, iter, path );
+        zdf::save_grid( h_data, info, iter, path );
 
     free_host( h_data );
 

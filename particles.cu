@@ -331,7 +331,7 @@ __host__
  * @param iter  Iteration metadata
  * @param path  Path where to save the file
  */
-void Particles::save( t_zdf_part_info &info, t_zdf_iteration &iter, std::string path ) {
+void Particles::save( zdf::part_info &info, zdf::iteration &iter, std::string path ) {
 
     // Get number of particles and data offsets
     unsigned int * d_out_offset;
@@ -340,8 +340,8 @@ void Particles::save( t_zdf_part_info &info, t_zdf_iteration &iter, std::string 
     info.np = np;
 
     // Open file
-    t_zdf_file part_file;
-    zdf_open_part_file( &part_file, &info, &iter, (path+"/"+info.name).c_str() );
+    zdf::file part_file;
+    zdf::open_part_file( part_file, info, iter, path+"/"+info.name );
 
     // Gather and save each quantity
     float *h_data, *d_data;
@@ -349,22 +349,22 @@ void Particles::save( t_zdf_part_info &info, t_zdf_iteration &iter, std::string 
     malloc_dev( d_data, np );
 
     gather( part::quant::x, h_data, d_data, np, d_out_offset );
-    zdf_add_quant_part_file( &part_file, "x", h_data, np );
+    zdf::add_quant_part_file( part_file, "x", h_data, np );
 
     gather( part::quant::y, h_data, d_data, np, d_out_offset );
-    zdf_add_quant_part_file( &part_file, "y", h_data, np );
+    zdf::add_quant_part_file( part_file, "y", h_data, np );
 
     gather( part::quant::ux, h_data, d_data, np, d_out_offset );
-    zdf_add_quant_part_file( &part_file, "ux", h_data, np );
+    zdf::add_quant_part_file( part_file, "ux", h_data, np );
 
     gather( part::quant::uy, h_data, d_data, np, d_out_offset );
-    zdf_add_quant_part_file( &part_file, "uy", h_data, np );
+    zdf::add_quant_part_file( part_file, "uy", h_data, np );
 
     gather( part::quant::uz, h_data, d_data, np, d_out_offset );
-    zdf_add_quant_part_file( &part_file, "uz", h_data, np );
+    zdf::add_quant_part_file( part_file, "uz", h_data, np );
 
     // Close the file
-    zdf_close_file( &part_file );
+    zdf::close_file( part_file );
 
     // Cleanup
     free_dev( d_data );
@@ -753,7 +753,7 @@ void Particles::tile_sort( Particles &tmp ) {
         nx.x, 
         tiles, ix, x, u,
         tmp.tiles, tmp.ix, tmp.x, tmp.u
-     );
+    );
 
     _bnd_in_x  <<< grid, block >>> ( 
         nx.x,
@@ -767,13 +767,11 @@ void Particles::tile_sort( Particles &tmp ) {
         tmp.tiles, tmp.ix, tmp.x, tmp.u
      );
 
-
     _bnd_in_y  <<< grid, block >>> ( 
         nx.y,
         tiles, ix, x, u,
         tmp.tiles, tmp.ix, tmp.x, tmp.u
     );
-
 }
 
 __host__

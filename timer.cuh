@@ -3,6 +3,10 @@
 
 #include <iostream>
 
+namespace timer {
+    enum units { s, ms, us, ns };
+}
+
 class Timer {
     private:
 
@@ -76,6 +80,20 @@ class Timer {
             cudaEventElapsedTime(&delta, startev, stopev );
             return delta;
         }
+    }
+
+    __host__
+    float elapsed( timer::units units ) {
+        float ms = elapsed();
+
+        float t;
+        switch( units ) {
+        case timer::s:  t = 1.e-3 * ms; break;
+        case timer::ms: t =         ms; break;
+        case timer::us: t = 1.e+3 * ms; break;
+        case timer::ns: t = 1.e+6 * ms; break;
+        }
+        return t;
     }
 
     __host__

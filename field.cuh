@@ -1,9 +1,8 @@
 #ifndef __FIELD__
 #define __FIELD__
 
-#include "tile_zdf.cuh"
+#include "zdf-cpp.h"
 #include <iostream>
-
 
 /**
  * @brief 
@@ -183,7 +182,7 @@ class Field {
      * The field type float must be supported by ZDF file format
      * 
      */
-    void save( t_zdf_grid_info &info, t_zdf_iteration &iter, std::string path );
+    void save( zdf::grid_info &info, zdf::iteration &iter, std::string path );
 };
 
 #endif
