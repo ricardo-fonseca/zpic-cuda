@@ -1,5 +1,17 @@
 # ZPIC CUDA Development
 
+## 2022.8.15 - Suplemental
+
+* Optimizes `particles::tile_sort()` routine
+  * See `optimizations.md` for details
+  * Local speedup of 5.54 x
+* Optimizes `Species::move_deposit()`
+  * See `optimizations.md` for details
+  * Local speedup of 1.55 x
+* Minor changes
+  * Cleans up info messages.
+  * Replaces multiple `_gather_*_kernel()` functions with a single templated `_gather_quant < quant >()` function
+
 ## 2022.8.15
 
 * Adds phasespace diagnostics

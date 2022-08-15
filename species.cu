@@ -456,7 +456,6 @@ void Species::advance( EMF const &emf, Current &current ) {
     // Increase internal iteration number
     iter++;
 }
-
 __device__
 /**
  * @brief Deposit (charge conserving) current for 1 segment inside a cell
@@ -464,18 +463,16 @@ __device__
  * @param ix        Particle cell
  * @param x0        Initial particle position
  * @param x1        Final particle position
- * @param delta     Particle motion
  * @param qnx       Normalization values for in plane current deposition
  * @param qvz       Out of plane current
  * @param J         current(J) grid (should be in shared memory)
  * @param stride    current(J) grid stride
  */
 inline void _dep_current_seg(
-    const int2 ix, const float2 x0, const float2 x1, const float2 delta,
+    const int2 ix, const float2 x0, const float2 x1,
     const float2 qnx, const float qvz,
     float3 * __restrict__ J, const int stride )
 {
-
     const float S0x0 = 0.5f - x0.x;
     const float S0x1 = 0.5f + x0.x;
 
@@ -488,8 +485,8 @@ inline void _dep_current_seg(
     const float S1y0 = 0.5f - x1.y;
     const float S1y1 = 0.5f + x1.y;
 
-    const float wl1 = qnx.x * delta.x;
-    const float wl2 = qnx.y * delta.y;
+    const float wl1 = qnx.x * (x1.x - x0.x);
+    const float wl2 = qnx.y * (x1.y - x0.y);
     
     const float wp10 = 0.5f*(S0y0 + S1y0);
     const float wp11 = 0.5f*(S0y1 + S1y1);
@@ -508,51 +505,6 @@ inline void _dep_current_seg(
 
     atomicAdd( &J[ ix.x   + stride*(ix.y+1)].z, qvz * ( S0x0 * S0y1 + S1x0 * S1y1 + (S0x0 * S1y1 - S1x0 * S0y1)/2.0f ));
     atomicAdd( &J[ ix.x+1 + stride*(ix.y+1)].z, qvz * ( S0x1 * S0y1 + S1x1 * S1y1 + (S0x1 * S1y1 - S1x1 * S0y1)/2.0f ));
-}
-
-__device__
-/**
- * @brief Splits trajectory for y cell crossings
- * 
- * @param ix        Initial cell
- * @param x0        Initial position
- * @param x1        Final position
- * @param delta     Particle motion
- * @param qnx       Normalization values for in plane current deposition
- * @param qvz_2     Out of plane current
- * @param J         Current grid
- * @param stride    Current grid y stride
- */
-void _dep_current_split_y( const int2 ix,
-    const float2 x0, const float2 x1, const float2 delta,
-    const float2 qnx, const float qvz,
-    float3 * __restrict__ J, const int stride )
-{
-    const int diy = ( x1.y >= 0.5f ) - ( x1.y < -0.5f );
-    if ( diy == 0 ) {
-        // No more splits
-        _dep_current_seg( ix, x0, x1, delta, qnx, qvz, J, stride );
-    } else {
-        const float yint = 0.5f * diy;
-        const float eps  = ( yint - x0.y ) / delta.y;
-        const float xint = x0.x + delta.x * eps;
-
-        // First segment
-        _dep_current_seg( 
-            ix,
-            x0,
-            make_float2( xint, yint ), 
-            make_float2( xint - x0.x, yint - x0.y ),  
-            qnx, qvz * eps, J, stride );
-
-        // Second segment
-        _dep_current_seg( 
-            make_int2  ( ix.x,        ix.y + diy), 
-            make_float2( xint,        - yint ),
-            make_float2( x1.x, x1.y   - diy),
-            make_float2( x1.x - xint, x1.y - yint ),
-            qnx, qvz * (1-eps), J, stride );
-    }
 }
 
 __global__
@@ -627,39 +579,102 @@ void _move_deposit_kernel(
             ((x1.y >= 0.5f) - (x1.y < -0.5f))
         );
 
-        // Deposit current
+        // Split trajectories:
+        int nvp = 1;
+        int2 v0_ix; float2 v0_x0, v0_x1; float v0_qvz;
+        int2 v1_ix; float2 v1_x0, v1_x1; float v1_qvz;
+        int2 v2_ix; float2 v2_x0, v2_x1; float v2_qvz;
+
+        float eps, xint, yint;
+        float qvz = q * pu.z * rg * 0.5f;
+
+        // Initial position is the same on all cases
+        v0_ix = ix0; v0_x0 = x0;
+
+        switch( 2*(deltai.x != 0) + (deltai.y != 0) )
         {
-            float qvz = q * pu.z * rg * 0.5f;
-            if ( deltai.x == 0 ) {
-                // No x splits
-                _dep_current_split_y( ix0, x0, x1, delta, qnx, qvz, J, stride );
-            } else {
-                // Split x current into 2 segments
-                const float xint = 0.5f * deltai.x;
-                const float eps  = ( xint - x0.x ) / delta.x;
-                const float yint = x0.y + delta.y * eps;
+        case(0): // no splits
+            v0_x1 = x1; v0_qvz = qvz;
+            break;
 
-                // First segment
-                _dep_current_split_y( 
-                    ix0, 
-                    x0, 
-                    make_float2( xint, yint ),
-                    make_float2( xint - x0.x, yint - x0.y ), 
-                    qnx, qvz * eps, J, stride );
+        case(1): // only y crossing
+            nvp++;
 
-                // Second segment
+            yint = 0.5f * deltai.y;
+            eps  = ( yint - x0.y ) / delta.y;
+            xint = x0.x + delta.x * eps;
 
-                // Correct for y cross on first segment
-                int diycross = ( yint >= 0.5f ) - ( yint < -0.5f );
-                
-                _dep_current_split_y( 
-                    make_int2( ix0.x + deltai.x, ix0.y + diycross) , 
-                    make_float2( -xint,           yint - diycross),
-                    make_float2( x1.x - deltai.x, x1.y - diycross ), 
-                    make_float2( x1.x - xint, (x1.y - yint) - diycross ),
-                    qnx, qvz * (1 - eps), J, stride );
+            v0_x1  = make_float2(xint,yint);
+            v0_qvz = qvz * eps;
+
+            v1_ix = make_int2( ix0.x, ix0.y  + deltai.y );
+            v1_x0 = make_float2(xint,-yint);
+            v1_x1 = make_float2( x1.x, x1.y  - deltai.y );
+            v1_qvz = qvz * (1-eps);
+
+            break;
+
+        case(2): // only x crossing
+        case(3): // x-y crossing
+            
+            // handle x cross
+            nvp++;
+            xint = 0.5f * deltai.x;
+            eps  = ( xint - x0.x ) / delta.x;
+            yint = x0.y + delta.y * eps;
+
+            v0_x1 = make_float2(xint,yint);
+            v0_qvz = qvz * eps;
+
+            v1_ix = make_int2( ix0.x + deltai.x, ix0.y);
+            v1_x0 = make_float2(-xint,yint);
+            v1_x1 = make_float2( x1.x - deltai.x, x1.y );
+            v1_qvz = qvz * (1-eps);
+
+            // handle additional y-cross, if need be
+            if ( deltai.y ) {
+                float yint2 = 0.5f * deltai.y;
+                nvp++;
+
+                if ( yint >= -0.5f && yint < 0.5f ) {
+                    // y crosssing on 2nd vp
+                    eps   = (yint2 - yint) / (x1.y - yint );
+                    float xint2 = -xint + (x1.x - xint ) * eps;
+                    
+                    v2_ix = make_int2( v1_ix.x, v1_ix.y + deltai.y );
+                    v2_x0 = make_float2(xint2,-yint2);
+                    v2_x1 = make_float2( v1_x1.x, v1_x1.y - deltai.y );
+                    v2_qvz = v1_qvz * (1-eps);
+
+                    // Correct other particle
+                    v1_x1 = make_float2(xint2,yint2);
+                    v1_qvz *= eps;
+                } else {
+                    // y crossing on 1st vp
+                    eps   = (yint2 - x0.y) / ( yint - x0.y );
+                    float xint2 = x0.x + ( xint - x0.x ) * eps;
+
+                    v2_ix = make_int2( v0_ix.x, v0_ix.y + deltai.y );
+                    v2_x0 = make_float2( xint2,-yint2);
+                    v2_x1 = make_float2( v0_x1.x, v0_x1.y - deltai.y );
+                    v2_qvz = v0_qvz * (1-eps);
+
+                    // Correct other particles
+                    v0_x1 = make_float2(xint2,yint2);
+                    v0_qvz *= eps;
+
+                    v1_ix.y += deltai.y;
+                    v1_x0.y -= deltai.y;
+                    v1_x1.y -= deltai.y;
+                }
             }
+            break;
         }
+
+        // Deposit vp current
+                       _dep_current_seg( v0_ix, v0_x0, v0_x1, qnx, v0_qvz, J, stride );
+        if ( nvp > 1 ) _dep_current_seg( v1_ix, v1_x0, v1_x1, qnx, v1_qvz, J, stride );
+        if ( nvp > 2 ) _dep_current_seg( v2_ix, v2_x0, v2_x1, qnx, v2_qvz, J, stride );
 
         // Correct position and store
         x1.x -= deltai.x;
@@ -684,8 +699,8 @@ void _move_deposit_kernel(
         d_current[tile_off + i].y += _move_deposit_buffer[i].y;
         d_current[tile_off + i].z += _move_deposit_buffer[i].z;
     }
-
 }
+
 
 __host__
 /**

@@ -8,6 +8,15 @@ namespace cg = cooperative_groups;
 
 #include <iostream>
 
+namespace fcomp {
+    enum cart  { x = 0, y, z };
+}
+
+namespace coord {
+    enum cart  { x = 0, y };
+}
+
+
 #ifndef M_PI
 #define M_PI        3.14159265358979323846264338327950288   ///< pi
 #endif
@@ -459,10 +468,6 @@ T exclusive_scan( T * const __restrict__ data, unsigned int const size ) {
     return sum.get();
 }
 
-}
-
-namespace fcomp {
-    enum cart  { x = 0, y, z };
 }
 
 #endif

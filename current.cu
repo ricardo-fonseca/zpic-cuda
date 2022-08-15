@@ -51,7 +51,6 @@ __host__
  */
 Current::~Current()
 {   
-    std::cout << "(*info*) Cleanup current..." << std::endl;
     delete (J);
 }
 

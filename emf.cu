@@ -43,9 +43,6 @@ EMF::EMF( uint2 const ntiles, uint2 const nx, float2 const box,
  */
 __host__
 EMF::~EMF(){
-
-    std::cout << "(*info*) Cleanup emf..." << std::endl;
-
     delete (E);
     delete (B);
 }
