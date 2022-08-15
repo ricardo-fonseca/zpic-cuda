@@ -8,7 +8,58 @@ import matplotlib.colors as colors
 
 import numpy as np
 
-def grid2d( filename, xlim = None, ylim = None, grid = False, cmap = None,
+def grid1d( filename : str, xlim = None, grid : bool = None, scale = None ):
+    """Generates a line plot from a 1D grid file
+
+    Args:
+        filename (str): _description_
+        xlim ( float(2), optional): Force x-axis range. Defaults to None.
+        grid (bool, optional): Use a grid on the plot. Defaults to True.
+        scale ( float(2), optional): Tuple describing parameter for linearly
+            scaling the data before plotting. Defaults to None.
+    """
+    
+    if ( not os.path.exists(filename) ):
+        # raise FileNotFoundError( filename ) 
+        print("(*error*) file {} not found.".format(filename), file = sys.stderr )
+        return
+
+    (ydata, info) = zdf.read(filename)
+
+    if ( info.type != "grid" ):
+        print("(*error*) file {} is not a grid file".format(filename))
+        return
+    
+    if ( info.grid.ndims != 1 ):
+        print("(*error*) file {} is not a 1D grid file".format(filename))
+        return
+
+    # Linearly scale data if requested
+    if ( scale ):
+        ydata = ydata * scale[0] + scale[1]
+
+
+    xlabel = info.grid.axis[0].label + ' [' + info.grid.axis[0].units + ']'
+    ylabel = info.grid.label + ' [' + info.grid.units + ']'
+    title = info.grid.label
+    timeLabel = "t = {:g}\,[{:s}]".format(info.iteration.t, info.iteration.tunits)
+
+    delta = ( info.grid.axis[0].max - info.grid.axis[0].min ) / info.grid.nx[0]
+    start = info.grid.axis[0].min + 0.5*delta
+    stop  = info.grid.axis[0].max - 0.5*delta
+
+    xdata = np.linspace( start, stop, num = info.grid.nx[0] )
+
+    plt.plot(xdata, ydata)
+    plt.title(r'$\sf{' + title + r'}$' + '\n' + r'$\sf{'+ timeLabel+ r'}$')
+
+    plt.xlabel(r'$\sf{' +xlabel+ r'}$')
+    plt.ylabel(r'$\sf{' +ylabel+ r'}$')
+
+    plt.grid(True)
+    plt.show()
+
+def grid2d( filename : str, xlim = None, ylim = None, grid = False, cmap = None,
     vsim = False, vmin = None, vmax = None, scale = None ):
     """Generates a colormap plot from a 2D grid zdf file
 
@@ -29,7 +80,6 @@ def grid2d( filename, xlim = None, ylim = None, grid = False, cmap = None,
         vsim:
             Setup a symmetric value scale [ -max(|val|), max(|val|) ]. Defaults to setting
             the value scale to [ min, max ]
-
     """
 
     if ( not os.path.exists(filename) ):
@@ -92,6 +142,37 @@ def grid2d( filename, xlim = None, ylim = None, grid = False, cmap = None,
     plt.grid(grid)
 
     plt.show()
+
+def grid( filename : str, xlim = None, ylim = None, grid : bool = False, cmap = None,
+    vsim = False, vmin = None, vmax = None, scale = None ):
+    """Generates a plot from 1D or 2D grids.
+
+    This works as driver for grid1d and grid2d routines.
+
+    Args:
+        filename (str): _description_
+        xlim (_type_, optional): _description_. Defaults to None.
+        ylim (_type_, optional): _description_. Defaults to None.
+        grid (bool, optional): _description_. Defaults to False.
+        cmap (_type_, optional): _description_. Defaults to None.
+        vsim (bool, optional): _description_. Defaults to False.
+        vmin (_type_, optional): _description_. Defaults to None.
+        vmax (_type_, optional): _description_. Defaults to None.
+        scale (_type_, optional): _description_. Defaults to None.
+    """
+
+    info = zdf.info(filename)
+
+    if ( info.type != "grid" ):
+        print("(*error*) file {} is not a grid file".format(filename))
+    elif ( info.grid.ndims == 1 ):
+        grid1d( filename, xlim = xlim, grid = grid, scale = scale )
+    elif ( info.grid.ndims == 2 ):
+        grid2d( filename, xlim = xlim, ylim = ylim, grid = grid, cmap = cmap,
+            vsim = vsim, vmin = vmin, vmax = vmax, scale = scale )
+    else:
+        print("(*error*) file {} - unsupported grid dimensions ({}).".format(filename, info.grid.ndims))
+
 
 def vfield2d( filex, filey, xlim = None, ylim = None, grid = False, cmap = None, vmin = 0, vmax = None, title = None ):
     """Generates a colormap plot 

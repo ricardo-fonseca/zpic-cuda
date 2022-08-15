@@ -57,7 +57,10 @@ Species::Species( std::string const name, float const m_q, uint2 const ppc, floa
         float2 const box, uint2 const ntiles, uint2 const nx, const float dt ) :
         name(name), m_q(m_q), ppc(ppc), n0( fabsf(n0) ), box(box), dt(dt)
 {
+    // Set charge normalization factor
     q = copysign( n0, m_q ) / (ppc.x * ppc.y);
+    
+    // Set cell size
     dx.x = box.x / (nx.x * ntiles.x);
     dx.y = box.y / (nx.y * ntiles.y);
 
@@ -1056,21 +1059,6 @@ void Species::push( VectorField * const E, VectorField * const B )
 
 }
 
-/**
- * @brief Deposit phasespace density
- * 
- * @param rep_type 
- * @param pha_nx 
- * @param pha_range 
- * @param buf 
- */
-void Species::deposit_phasespace( const int rep_type, const int2 pha_nx, const float2 pha_range[2],
-        float buf[]) {
-
-    std::cerr << __func__ << " not implemented yet." << std::endl;
-
-}
-
 __global__
 /**
  * @brief CUDA kernel for depositing charge
@@ -1169,14 +1157,14 @@ void Species::save( ) const {
     };
 
     const char * qunits[] = {
-        "c/\\omega_p", "c/\\omega_p",
+        "c/\\omega_n", "c/\\omega_n",
         "c","c","c"
     };
 
     zdf::iteration iter_info = {
         .n = iter,
         .t = iter * dt,
-        .time_units = (char *) "1/\\omega_p"
+        .time_units = (char *) "1/\\omega_n"
     };
 
     // Omit number of particles, this will be filled in later
@@ -1221,7 +1209,7 @@ void Species::save_charge() const {
         .min = 0.,
         .max = box.x,
         .label = (char *) "x",
-        .units = (char *) "c/\\omega_p"
+        .units = (char *) "c/\\omega_n"
     };
 
     axis[1] = (zdf::grid_axis) {
@@ -1229,7 +1217,7 @@ void Species::save_charge() const {
         .min = 0.,
         .max = box.y,
         .label = (char *) "y",
-        .units = (char *) "c/\\omega_p"
+        .units = (char *) "c/\\omega_n"
     };
 
     std::string grid_name = name + "-charge";
@@ -1246,11 +1234,461 @@ void Species::save_charge() const {
         .name = (char *) "ITERATION",
         .n = iter,
         .t = iter * dt,
-        .time_units = (char *) "1/\\omega_p"
+        .time_units = (char *) "1/\\omega_n"
     };
 
     std::string path = "CHARGE/";
     path += name;
     
     charge.save( info, iter_info, path.c_str() );
+}
+
+/**
+ * @brief CUDA kernel for depositing 1d phasespace
+ * 
+ * @tparam q        Phasespace quantity
+ * @param d_data    Output data
+ * @param range     Phasespace value range
+ * @param size      Phasespace grid size
+ * @param tile_nx   Size of tile grid
+ * @param norm      Normalization factor
+ * @param d_tiles   Particle tile information
+ * @param d_ix      Particle data (cell)
+ * @param d_x       Particle data (pos)
+ * @param d_u       Particle data (generalized momenta)
+ */
+template < phasespace::quant q >
+__global__ void _dep_pha1_kernel( 
+    float * const __restrict__ d_data, float2 const range, unsigned const size,
+    uint2 const tile_nx, float const norm, 
+    t_part_tile const * const __restrict__ d_tiles,
+    int2* __restrict__ d_ix, float2* __restrict__ d_x, float3* __restrict__ d_u )
+{
+    const int tid = blockIdx.y * gridDim.x + blockIdx.x;
+
+    const int part_offset = d_tiles[ tid ].pos;
+    const int np     = d_tiles[ tid ].n;
+    int2   __restrict__ *ix  = &d_ix[ part_offset ];
+    float2 __restrict__ *x   = &d_x[ part_offset ];
+    float3 __restrict__ *u   = &d_u[ part_offset ];
+
+    float const pha_rdx = size / (range.y - range.x);
+
+    for( int i = threadIdx.x; i < np; i+= blockDim.x ) {
+        float d;
+        switch( q ) {
+        case( phasespace:: x ): d = ( blockIdx.x * tile_nx.x + ix[i].x) + (x[i].x + 0.5f); break;
+        case( phasespace:: y ): d = ( blockIdx.y * tile_nx.y + ix[i].y) + (x[i].y + 0.5f); break;
+        case( phasespace:: ux ): d = u[i].x; break;
+        case( phasespace:: uy ): d = u[i].y; break;
+        case( phasespace:: uz ): d = u[i].z; break;
+        }
+
+        float n =  (d - range.x ) * pha_rdx - 0.5f;
+        int   k = int( n + 1 ) - 1;
+        float w = n - k;
+
+        if ((k   >= 0) && (k   < size-1)) atomicAdd( &d_data[k  ], (1-w) * norm );
+        if ((k+1 >= 0) && (k+1 < size-1)) atomicAdd( &d_data[k+1],    w  * norm );
+    }
+}
+
+__host__
+/**
+ * @brief Deposit 1D phasespace
+ * 
+ * Output data will be zeroed before deposition
+ * 
+ * @param d_data    Output (device) data
+ * @param quant     Phasespace quantity
+ * @param range     Phasespace value range
+ * @param size      Phasespace grid size
+ */
+void Species::dep_phasespace( float * const d_data, phasespace::quant quant, 
+    float2 range, unsigned const size )
+{
+    // Zero device memory
+    auto err = cudaMemsetAsync( d_data, 0, size * sizeof(float) );
+    if ( err != cudaSuccess ) {
+        std::cerr << "(*error*) Unable to zero device memory in " <<  __func__ << std::endl;
+        std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
+        exit(1);
+    }
+    
+    dim3 grid( particles -> ntiles.x, particles -> ntiles.y );
+    dim3 block( 1024 );
+
+    // In OSIRIS we don't take the absolute value of q
+    float norm = fabs(q) * ( dx.x * dx.y ) *
+                 size / (range.y - range.x) ;
+
+    switch(quant) {
+    case( phasespace::x ):
+        range.y /= dx.x;
+        range.x /= dx.x;
+        _dep_pha1_kernel<phasespace::x> <<< grid, block >>> (
+            d_data, range, size, particles -> nx, norm, 
+            particles -> tiles, particles -> ix, particles -> x, particles -> u
+        );
+        break;
+    case( phasespace:: y ):
+        range.y /= dx.y;
+        range.x /= dx.y;
+        _dep_pha1_kernel<phasespace::y> <<< grid, block >>> (
+            d_data, range, size, particles -> nx, norm, 
+            particles -> tiles, particles -> ix, particles -> x, particles -> u
+        );
+        break;
+    case( phasespace:: ux ):
+        _dep_pha1_kernel<phasespace::ux> <<< grid, block >>> (
+            d_data, range, size, particles -> nx, norm, 
+            particles -> tiles, particles -> ix, particles -> x, particles -> u
+        );
+        break;
+    case( phasespace:: uy ):
+        _dep_pha1_kernel<phasespace::uy> <<< grid, block >>> (
+            d_data, range, size, particles -> nx, norm, 
+            particles -> tiles, particles -> ix, particles -> x, particles -> u
+        );
+        break;
+    case( phasespace:: uz ):
+        _dep_pha1_kernel<phasespace::uz> <<< grid, block >>> (
+            d_data, range, size, particles -> nx, norm, 
+            particles -> tiles, particles -> ix, particles -> x, particles -> u
+        );
+        break;
+    };
+}
+
+__host__
+/**
+ * @brief Save 1D phasespace
+ * 
+ * @param q         Phasespace quantity
+ * @param range     Phasespace range
+ * @param size      Phasespace grid size
+ */
+void Species::save_phasespace( phasespace::quant quant, float2 const range, 
+    unsigned const size )
+{
+    std::string qname, qlabel, qunits;
+
+    phasespace::qinfo( quant, qname, qlabel, qunits );
+    
+    // Prepare file info
+    zdf::grid_axis axis = {
+        .name = (char *) qname.c_str(),
+        .min = range.x,
+        .max = range.y,
+        .label = (char *) qlabel.c_str(),
+        .units = (char *) qunits.c_str()
+    };
+
+    std::string pha_name  = name + "-" + qname;
+    std::string pha_label = name + "\\,(" + qlabel+")";
+
+    zdf::grid_info info = {
+        .name = (char *) pha_name.c_str(),
+        .ndims = 1,
+        .label = (char *) pha_label.c_str(),
+        .units = (char *) "n_e",
+        .axis  = &axis
+    };
+
+    info.count[0] = size;
+
+    zdf::iteration iter_info = {
+        .name = (char *) "ITERATION",
+        .n = iter,
+        .t = iter * dt,
+        .time_units = (char *) "1/\\omega_n"
+    };
+
+    // Deposit 1D phasespace
+    float * d_data, * h_data;
+    malloc_host( h_data, size  );
+    malloc_dev( d_data, size );
+
+    dep_phasespace( d_data, quant, range, size );
+
+    // Copy data to host
+    devhost_memcpy( h_data, d_data, size );
+
+    // Save file
+    zdf::save_grid( h_data, info, iter_info, "PHASESPACE/" + name );
+
+    free_host( h_data );
+    free_dev( d_data );
+}
+
+/**
+ * @brief CUDA kernel for depositing 2D phasespace
+ * 
+ * @tparam q0       Quantity 0
+ * @tparam q1       Quantity 1
+ * @param d_data    Ouput data
+ * @param range0    Range of values of quantity 0
+ * @param size0     Phasespace grid size for quantity 0
+ * @param range1    Range of values of quantity 1
+ * @param size1     Range of values of quantity 1
+ * @param tile_nx   Size of tile grid
+ * @param norm      Normalization factor
+ * @param d_tiles   Particle tile information
+ * @param d_ix      Particle data (cell)
+ * @param d_x       Particle data (pos)
+ * @param d_u       Particle data (generalized momenta)
+ */
+template < phasespace::quant quant0, phasespace::quant quant1 >
+__global__ void _dep_pha2_kernel( 
+    float * const __restrict__ d_data, 
+    float2 const range0, unsigned int const size0,
+    float2 const range1, unsigned int const size1,
+    uint2 const tile_nx, float const norm, 
+    t_part_tile const * const __restrict__ d_tiles,
+    int2* __restrict__ d_ix, float2* __restrict__ d_x, float3* __restrict__ d_u )
+{
+    static_assert( quant1 > quant0, "quant1 must be > quant0" );
+    
+    const int tid = blockIdx.y * gridDim.x + blockIdx.x;
+
+    const int part_offset = d_tiles[ tid ].pos;
+    const int np     = d_tiles[ tid ].n;
+    int2   __restrict__ *ix  = &d_ix[ part_offset ];
+    float2 __restrict__ *x   = &d_x[ part_offset ];
+    float3 __restrict__ *u   = &d_u[ part_offset ];
+
+    float const pha_rdx0 = size0 / (range0.y - range0.x);
+    float const pha_rdx1 = size1 / (range1.y - range1.x);
+
+    for( int i = threadIdx.x; i < np; i+= blockDim.x ) {
+        float d0;
+        switch( quant0 ) {
+        case( phasespace:: x ):  d0 = ( blockIdx.x * tile_nx.x + ix[i].x) + (x[i].x + 0.5f); break;
+        case( phasespace:: y ):  d0 = ( blockIdx.y * tile_nx.y + ix[i].y) + (x[i].y + 0.5f); break;
+        case( phasespace:: ux ): d0 = u[i].x; break;
+        case( phasespace:: uy ): d0 = u[i].y; break;
+        case( phasespace:: uz ): d0 = u[i].z; break;
+        }
+
+        float n0 =  (d0 - range0.x ) * pha_rdx0 - 0.5f;
+        int   k0 = int( n0 + 1 ) - 1;
+        float w0 = n0 - k0;
+
+        float d1;
+        switch( quant1 ) {
+        //case( phasespace:: x ):  d1 = ( blockIdx.x * tile_nx.x + ix[i].x) + (x[i].x + 0.5f); break;
+        case( phasespace:: y ):  d1 = ( blockIdx.y * tile_nx.y + ix[i].y) + (x[i].y + 0.5f); break;
+        case( phasespace:: ux ): d1 = u[i].x; break;
+        case( phasespace:: uy ): d1 = u[i].y; break;
+        case( phasespace:: uz ): d1 = u[i].z; break;
+        }
+
+        float n1 =  (d1 - range1.x ) * pha_rdx1 - 0.5f;
+        int   k1 = int( n1 + 1 ) - 1;
+        float w1 = n1 - k1;
+
+        if ((k0   >= 0) && (k0   < size0-1) && (k1   >= 0) && (k1   < size1-1))
+            atomicAdd( &d_data[(k1  )*size0 + k0  ], (1-w0) * (1-w1) * norm );
+        if ((k0+1 >= 0) && (k0+1 < size0-1) && (k1   >= 0) && (k1   < size1-1))
+            atomicAdd( &d_data[(k1  )*size0 + k0+1],    w0  * (1-w1) * norm );
+        if ((k0   >= 0) && (k0   < size0-1) && (k1+1 >= 0) && (k1+1 < size1-1))
+            atomicAdd( &d_data[(k1+1)*size0 + k0  ], (1-w0) *    w1  * norm );
+        if ((k0+1 >= 0) && (k0+1 < size0-1) && (k1+1 >= 0) && (k1+1 < size1-1))
+            atomicAdd( &d_data[(k1+1)*size0 + k0+1],    w0  *    w1  * norm );
+    }
+}
+
+__host__
+/**
+ * @brief Deposits a 2D phasespace in a device buffer
+ * 
+ * @param d_data    Pointer to device buffer
+ * @param quant0    Quantity 0
+ * @param range0    Range of values of quantity 0
+ * @param size0     Phasespace grid size for quantity 0
+ * @param quant0    Quantity 1
+ * @param range1    Range of values of quantity 1
+ * @param size1     Phasespace grid size for quantity 1
+ */
+void Species::dep_phasespace( 
+    float * const d_data,
+    phasespace::quant quant0, float2 range0, unsigned const size0,
+    phasespace::quant quant1, float2 range1, unsigned const size1 ) {
+
+    // Zero device memory
+    auto err = cudaMemsetAsync( d_data, 0, size0 * size1 * sizeof(float) );
+    if ( err != cudaSuccess ) {
+        std::cerr << "(*error*) Unable to zero device memory in " <<  __func__ << std::endl;
+        std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
+        exit(1);
+    }
+    
+    dim3 grid( particles -> ntiles.x, particles -> ntiles.y );
+    dim3 block( 1024 );
+
+    // In OSIRIS we don't take the absolute value of q
+    float norm = fabs(q) * ( dx.x * dx.y ) *
+                           ( size0 / (range0.y - range0.x) ) *
+                           ( size1 / (range1.y - range1.x) );
+
+    switch(quant0) {
+    case( phasespace::x ):
+        range0.y /= dx.x;
+        range0.x /= dx.x;
+        switch(quant1) {
+        case( phasespace::y ):
+            range1.y /= dx.y;
+            range1.x /= dx.y;
+
+            _dep_pha2_kernel<phasespace::x,phasespace::y> <<< grid, block >>> (
+                d_data, range0, size0, range1, size1, particles -> nx, norm, 
+                particles -> tiles, particles -> ix, particles -> x, particles -> u
+            );
+            break;
+        case( phasespace::ux ):
+            _dep_pha2_kernel<phasespace::x,phasespace::ux> <<< grid, block >>> (
+                d_data, range0, size0, range1, size1, particles -> nx, norm, 
+                particles -> tiles, particles -> ix, particles -> x, particles -> u
+            );
+            break;
+        case( phasespace::uy ):
+            _dep_pha2_kernel<phasespace::x,phasespace::uy> <<< grid, block >>> (
+                d_data, range0, size0, range1, size1, particles -> nx, norm, 
+                particles -> tiles, particles -> ix, particles -> x, particles -> u
+            );
+            break;
+        case( phasespace::uz ):
+            _dep_pha2_kernel<phasespace::x,phasespace::uz> <<< grid, block >>> (
+                d_data, range0, size0, range1, size1, particles -> nx, norm, 
+                particles -> tiles, particles -> ix, particles -> x, particles -> u
+            );
+            break;
+        }
+        break;
+    case( phasespace:: y ):
+        range0.y /= dx.y;
+        range0.x /= dx.y;
+        switch(quant1) {
+        case( phasespace::ux ):
+            _dep_pha2_kernel<phasespace::y,phasespace::ux> <<< grid, block >>> (
+                d_data, range0, size0, range1, size1, particles -> nx, norm, 
+                particles -> tiles, particles -> ix, particles -> x, particles -> u
+            );
+            break;
+        case( phasespace::uy ):
+            _dep_pha2_kernel<phasespace::y,phasespace::uy> <<< grid, block >>> (
+                d_data, range0, size0, range1, size1, particles -> nx, norm, 
+                particles -> tiles, particles -> ix, particles -> x, particles -> u
+            );
+            break;
+        case( phasespace::uz ):
+            _dep_pha2_kernel<phasespace::y,phasespace::uz> <<< grid, block >>> (
+                d_data, range0, size0, range1, size1, particles -> nx, norm, 
+                particles -> tiles, particles -> ix, particles -> x, particles -> u
+            );
+            break;
+        }
+        break;
+    case( phasespace:: ux ):
+        switch(quant1) {
+        case( phasespace::uy ):
+            _dep_pha2_kernel<phasespace::ux,phasespace::uy> <<< grid, block >>> (
+                d_data, range0, size0, range1, size1, particles -> nx, norm, 
+                particles -> tiles, particles -> ix, particles -> x, particles -> u
+            );
+            break;
+        case( phasespace::uz ):
+            _dep_pha2_kernel<phasespace::ux,phasespace::uz> <<< grid, block >>> (
+                d_data, range0, size0, range1, size1, particles -> nx, norm, 
+                particles -> tiles, particles -> ix, particles -> x, particles -> u
+            );
+            break;
+        }
+        break;
+    case( phasespace:: uy ):
+        _dep_pha2_kernel<phasespace::uy,phasespace::uz> <<< grid, block >>> (
+            d_data, range0, size0, range1, size1, particles -> nx, norm, 
+            particles -> tiles, particles -> ix, particles -> x, particles -> u
+        );
+        break;
+    };
+}
+
+__host__
+/**
+ * @brief Save 2D phasespace
+ * 
+ * @param quant0    Quantity 0
+ * @param range0    Range of values of quantity 0
+ * @param size0     Phasespace grid size for quantity 0
+ * @param quant1    Quantity 1
+ * @param range1    Range of values of quantity 1
+ * @param size1     Phasespace grid size for quantity 0
+ */
+void Species::save_phasespace( 
+    phasespace::quant quant0, float2 const range0, unsigned const size0,
+    phasespace::quant quant1, float2 const range1, unsigned const size1 )
+{
+
+    if ( quant0 >= quant1 ) {
+        std::cerr << "(*error*) for 2D phasespaces, the 2nd quantity must be indexed higher thatn the first one\n";
+        return;
+    }
+
+    std::string qname0, qlabel0, qunits0;
+    std::string qname1, qlabel1, qunits1;
+
+    phasespace::qinfo( quant0, qname0, qlabel0, qunits0 );
+    phasespace::qinfo( quant1, qname1, qlabel1, qunits1 );
+    
+    // Prepare file info
+    zdf::grid_axis axis[2] = {
+        zdf::grid_axis {
+            .name = (char *) qname0.c_str(),
+            .min = range0.x,
+            .max = range0.y,
+            .label = (char *) qlabel0.c_str(),
+            .units = (char *) qunits0.c_str()
+        },
+        zdf::grid_axis {
+            .name = (char *) qname1.c_str(),
+            .min = range1.x,
+            .max = range1.y,
+            .label = (char *) qlabel1.c_str(),
+            .units = (char *) qunits1.c_str()
+        }
+    };
+
+
+    std::string pha_name  = name + "-" + qname0 + qname1;
+    std::string pha_label = name + " \\,(" + qlabel0 + "\\rm{-}" + qlabel1+")";
+
+    zdf::grid_info info = {
+        .name = (char *) pha_name.c_str(),
+        .ndims = 2,
+        .count = { size0, size1, 0 },
+        .label = (char *) pha_label.c_str(),
+        .units = (char *) "n_e",
+        .axis  = axis
+    };
+
+    zdf::iteration iter_info = {
+        .name = (char *) "ITERATION",
+        .n = iter,
+        .t = iter * dt,
+        .time_units = (char *) "1/\\omega_n"
+    };
+
+    float * d_data, * h_data;
+    malloc_host( h_data, size0 * size1  );
+    malloc_dev( d_data, size0 * size1 );
+
+    dep_phasespace( d_data, quant0, range0, size0, quant1, range1, size1 );
+
+    devhost_memcpy( h_data, d_data, size0 * size1 );
+
+    zdf::save_grid( h_data, info, iter_info, "PHASESPACE/" + name );
+
+    free_host( h_data );
+    free_dev( d_data );
 }

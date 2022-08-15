@@ -97,11 +97,12 @@ void test_sort_deposit() {
     Current current( ntiles, nx, box, dt );
 
     uint2 ppc = {8,8};
-    float3 uth = {0};
+    float3 uth = {0.1, 0.2, 0.3 };
 
+    float3 ufl = {0.,    0.,    0.};
 //    float3 ufl = {1000.,    0.,    0.};
 //    float3 ufl = {   0., 1000.,    0.};
-    float3 ufl = {   0.,    0., 1000.};
+//   float3 ufl = {   0.,    0., 1000.};
 //    float3 ufl = {1000., 1000., 1000.};
 
     Species electrons( "electrons", -1, ppc, 1.0, box, ntiles, nx, dt );
@@ -136,9 +137,24 @@ void test_sort_deposit() {
 
         electrons.save_charge();
 
-        current.save( fcomp:: x );
-        current.save( fcomp:: y );
-        current.save( fcomp:: z );
+        electrons.save_phasespace( phasespace::x, make_float2( 0., 25.6), 200 ); 
+        // electrons.save_phasespace( phasespace::y, make_float2( 0., 25.6), 200 ); 
+
+        // electrons.save_phasespace( phasespace::ux, make_float2( -1., 1.), 128, 
+        //                           phasespace::uy, make_float2( -1., 1.), 128 );
+
+        electrons.save_phasespace( phasespace::x, make_float2( -1., 26.6), 150, 
+                                   phasespace::y, make_float2( -1., 26.6), 150 );
+
+        // electrons.save_phasespace( phasespace::x, make_float2( -1., 26.6), 128, 
+        //                            phasespace::ux, make_float2( -1., 2.), 128 );
+
+        // electrons.save_phasespace( phasespace::y, make_float2( -1., 26.6), 128, 
+        //                           phasespace::ux, make_float2( -1., 2.), 128 );
+
+        // current.save( fcomp:: x );
+        // current.save( fcomp:: y );
+        // current.save( fcomp:: z );
 
         iter++;
     }
@@ -212,9 +228,9 @@ int main() {
 
     // test_emf();
 
-    // test_sort_deposit();
+    test_sort_deposit();
 
-    test_weibel();
+    // test_weibel();
 
     return 0;
 }

@@ -39,7 +39,7 @@ class Field {
     __host__ ~Field();
 
     /**
-     * @brief zero host and device data on a Field grid
+     * @brief zero device data on a Field grid
      * 
      * Note that the device data is zeroed using the `cudaMemset()` function that is
      * asynchronous with respect to the host.
@@ -51,11 +51,11 @@ class Field {
         size_t size = buffer_size( ) * sizeof(float);
 
         // zero device data
-        cudaError_t err = cudaMemset( d_buffer, 0, size );
+        auto err = cudaMemsetAsync( d_buffer, 0, size );
         if ( err != cudaSuccess ) {
             std::cerr << "(*error*) Unable to zero device memory for tiled grid." << std::endl;
             std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
-            return -1;
+            exit(1);
         }
 
         return 0;

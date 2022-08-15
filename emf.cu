@@ -422,7 +422,7 @@ void EMF::save( const emf::field field, fcomp::cart const fc ) {
         .name = vfname,
     	.ndims = 2,
     	.label = vflabel,
-    	.units = (char *) "m_e c \\omega_p e^{-1}",
+    	.units = (char *) "m_e c \\omega_n e^{-1}",
     	.axis = axis
     };
 
@@ -433,7 +433,7 @@ void EMF::save( const emf::field field, fcomp::cart const fc ) {
     zdf::iteration iteration = {
     	.n = iter,
     	.t = iter * dt,
-    	.time_units = (char *) "1/\\omega_p"
+    	.time_units = (char *) "1/\\omega_n"
     };
 
     f -> save( fc, info, iteration, "EMF" );

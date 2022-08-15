@@ -125,7 +125,7 @@ void Current::save( fcomp::cart const jc ) {
         .name = vfname,
     	.ndims = 2,
     	.label = vflabel,
-    	.units = (char *) "e \\omega_p^2 / c",
+    	.units = (char *) "e \\omega_n^2 / c",
     	.axis = axis
     };
 
@@ -135,7 +135,7 @@ void Current::save( fcomp::cart const jc ) {
     zdf::iteration iteration = {
     	.n = iter,
     	.t = iter * dt,
-    	.time_units = (char *) "1/\\omega_p"
+    	.time_units = (char *) "1/\\omega_n"
     };
 
     J -> save( jc, info, iteration, "CURRENT" );

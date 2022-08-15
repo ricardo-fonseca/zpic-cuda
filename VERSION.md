@@ -1,5 +1,16 @@
 # ZPIC CUDA Development
 
+## 2022.8.15
+
+* Adds phasespace diagnostics
+  * Both 1D and 2D phasespaces can be generated with any of (x,y,ux,uy,uz) values
+* Makes Field and VectorField `::zero()` method asynchronous (using `cudaMemsetAsync()`)
+* Fixes ouput units inconsistency (reference frequency is now $\omega_n$)
+* Updates visualization tools
+  * Adds `visxd.grid1d()` routine to generate line plots from 1d data
+  * Adds `visxd.grid()` routine that automatically chooses between `visxd.grid1d()` and `visxd.grid2d()` based on file grid dimensions
+  * Renames `plot_sfield()` to `plot_data()`. It now works for both 2d and 1d files.
+
 ## 2022.8.14
 
 __MILESTONE:__ The code has successfully completed the Weibel simulation test.

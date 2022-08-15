@@ -16,6 +16,7 @@ CHARGE/
 CURRENT/
 EMF/
 PARTICLES/
+PHASESPACE/
 
 # Python leftovers
 __pycache__/

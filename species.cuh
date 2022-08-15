@@ -58,6 +58,30 @@ namespace density {
     }
 }
 
+namespace phasespace {
+    enum quant { x, y, ux, uy, uz };
+
+    static inline void qinfo( quant q, std::string & name, std::string & label, std::string & units ) {
+        switch(q) {
+        case x :
+            name = "x"; label = "x"; units = "c/\\omega_n";
+            break;
+        case y :
+            name = "y"; label = "y"; units = "c/\\omega_n";
+            break;
+        case ux :
+            name = "ux"; label = "u_x"; units = "m_e c";
+            break;
+        case uy :
+            name = "uy"; label = "u_y"; units = "m_e c";
+            break;
+        case uz :
+            name = "uz"; label = "u_y"; units = "m_e c";
+            break;
+        }
+    }
+}
+
 /**
  * @brief Charged particles class
  * 
@@ -87,6 +111,15 @@ private:
 
     // Time step
     float dt;
+
+    __host__
+    void dep_phasespace( float * const d_data, 
+        phasespace::quant q, float2 const range, unsigned const size );
+
+    __host__
+    void dep_phasespace( float * const d_data,
+        phasespace::quant quant0, float2 range0, unsigned const size0,
+        phasespace::quant quant1, float2 range1, unsigned const size1 );
 
 public:
 
@@ -119,10 +152,6 @@ public:
     void deposit_charge( Field &charge ) const;
 
     __host__
-    void deposit_phasespace( const int rep_type, const int2 pha_nx, const float2 pha_range[2],
-        float buf[]);
-        
-    __host__
     void report( const int rep_type, const int2 pha_nx, const float2 pha_range[2]);
 
     __host__
@@ -147,6 +176,15 @@ public:
 
     __host__
     void save_charge() const;
+
+    __host__
+    void save_phasespace( 
+        phasespace::quant quant, float2 const range, unsigned size );
+
+    __host__
+    void save_phasespace( 
+        phasespace::quant quant0, float2 const range0, unsigned size0,
+        phasespace::quant quant1, float2 const range1, unsigned size1 );
 
     __host__
     void push( VectorField * const E, VectorField * const B );

@@ -2,6 +2,7 @@
 #define __VECTOR_FIELD__
 
 #include <cstddef>
+#include <iostream>
 #include "zdf-cpp.h"
 
 /**
@@ -25,7 +26,24 @@ class VectorField {
     __host__ VectorField( uint2 const ntiles, uint2 const nx );
     __host__ ~VectorField();
 
-    __host__ int zero();
+    /**
+     * @brief zero device data on a Field grid
+     * 
+     * Note that the device data is zeroed using the `cudaMemset()` function that is
+     * asynchronous with respect to the host.
+     * 
+     * @return int       Returns 0 on success, -1 on error
+     */
+    __host__ int zero() {
+        size_t size = buffer_size( ) * sizeof(float3);
+        auto err = cudaMemsetAsync( d_buffer, 0, size );
+        if ( err != cudaSuccess ) {
+            std::cerr << "(*error*) Unable to zero device memory for tiled grid." << std::endl;
+            std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
+            return -1;
+        }
+        return 0;
+    }
 
     __host__ void set( float3 const val );
 

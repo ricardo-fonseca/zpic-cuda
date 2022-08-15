@@ -50,31 +50,6 @@ VectorField::~VectorField() {
 }
 
 /**
- * @brief zero host and device data on a VectorField grid
- * 
- * Note that the device data is zeroed using the `cudaMemset()` function that is
- * asynchronous with respect to the host.
- * 
- * @return int       Returns 0 on success, -1 on error
- */
-__host__
-int VectorField::zero( ) {
-
-    size_t size = buffer_size( ) * sizeof(float3);
-
-    // zero GPU data
-    auto err = cudaMemset( d_buffer, 0, size );
-    if ( err != cudaSuccess ) {
-        std::cerr << "(*error*) Unable to zero device memory for float3 tiled grid." << std::endl;
-        std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
-        exit(1);
-    }
-
-    return 0;
-}
-
-
-/**
  * @brief CUDA kernel for VectorField_set
  * 
  * @param d_buffer      float3 Data buffer
