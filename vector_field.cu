@@ -15,7 +15,7 @@ __host__
  * @param gc        Number of guard cells
  */
 VectorField::VectorField( uint2 const ntiles, uint2 const nx, uint2 const gc_[2]) :
-    ntiles( ntiles ), nx( nx )
+    ntiles( ntiles ), nx( nx ), periodic( make_int2(1,1) )
 {
     gc[0] = gc_[0];
     gc[1] = gc_[1];
@@ -280,6 +280,7 @@ void VectorField::add( const VectorField &rhs )
  * @brief CUDA kernel for updating guard cell values along x direction
  * 
  * @param buffer    Global data buffer (no offset)
+ * @param periodic  Use periodic boundaries along x direction
  * @param ext_nx    External tile size
  * @param int_nx    Internal tile size
  * @param gcx0      Number of guard cells at the lower x boundary
@@ -288,36 +289,46 @@ void VectorField::add( const VectorField &rhs )
 __global__
 void _copy_gcx_kernel( 
     float3 * const __restrict__ buffer, 
+    int const periodic,
     uint2 const ext_nx, uint2 const int_nx,
     const int gcx0, const int gcx1 )
 {
-    // Find neighbours
     const int y_coord = blockIdx.y;
     const int x_coord = blockIdx.x;
-
-    const int x_lcoord  = ((x_coord > 0)? x_coord : gridDim.x) - 1;
-    const int x_ucoord  = ((x_coord < gridDim.x-1)? x_coord : 0) + 1;
-
     const int tile_vol = ext_nx.x * ext_nx.y;
-
     float3 * __restrict__ local   = buffer + (y_coord * gridDim.x + x_coord ) * tile_vol;
-    float3 * __restrict__ x_lower = buffer + (y_coord * gridDim.x + x_lcoord) * tile_vol;
-    float3 * __restrict__ x_upper = buffer + (y_coord * gridDim.x + x_ucoord) * tile_vol;
 
-    // j = [0 .. ext_nx.y[
-    // i = [0 .. gc0[
-    for( int idx = threadIdx.x; idx < ext_nx.y * gcx0; idx += blockDim.x ) {
-        const int i = idx % gcx0;
-        const int j = idx / gcx0;
-        local[ i + j * ext_nx.x ] = x_lower[ int_nx.x + i + j * ext_nx.x ];
+    // Find neighbours
+    int x_lcoord = x_coord - 1;
+    int x_ucoord = x_coord + 1;
+
+    if ( periodic ) {
+        if ( x_lcoord < 0 ) x_lcoord += gridDim.x;
+        if ( x_ucoord > gridDim.x-1 ) x_ucoord -= gridDim.x;
     }
 
-    // j = [0 .. ext_nx.y[
-    // i = [0 .. gc1[
-    for( int idx = threadIdx.x; idx < ext_nx.y * gcx1; idx += blockDim.x ) {
-        const int i = idx % gcx1;
-        const int j = idx / gcx1;
-        local[ gcx0 + int_nx.x + i + j * ext_nx.x ] = x_upper[ gcx0 + i + j * ext_nx.x ];
+    // Copy data to lower guard cells
+    if ( x_lcoord >= 0 ) {
+        float3 * __restrict__ x_lower = buffer + (y_coord * gridDim.x + x_lcoord) * tile_vol;
+        // j = [0 .. ext_nx.y[
+        // i = [0 .. gc0[
+        for( int idx = threadIdx.x; idx < ext_nx.y * gcx0; idx += blockDim.x ) {
+            const int i = idx % gcx0;
+            const int j = idx / gcx0;
+            local[ i + j * ext_nx.x ] = x_lower[ int_nx.x + i + j * ext_nx.x ];
+        }
+    }
+
+    // Copy data to upper guard cells
+    if ( x_ucoord < gridDim.x ) {
+        float3 * __restrict__ x_upper = buffer + (y_coord * gridDim.x + x_ucoord) * tile_vol;
+        // j = [0 .. ext_nx.y[
+        // i = [0 .. gc1[
+        for( int idx = threadIdx.x; idx < ext_nx.y * gcx1; idx += blockDim.x ) {
+            const int i = idx % gcx1;
+            const int j = idx / gcx1;
+            local[ gcx0 + int_nx.x + i + j * ext_nx.x ] = x_upper[ gcx0 + i + j * ext_nx.x ];
+        }
     }
 }
 
@@ -325,6 +336,7 @@ void _copy_gcx_kernel(
  * @brief CUDA kernel for updating guard cell values along y direction
  * 
  * @param buffer    Global data buffer (no offset)
+ * @param periodic  Use periodic boundaries along y direction
  * @param ext_nx    External tile size
  * @param int_nx    Internal tile size
  * @param gcy0      Number of guard cells at the lower y boundary
@@ -333,36 +345,46 @@ void _copy_gcx_kernel(
 __global__
 void _copy_gcy_kernel( 
     float3 * const __restrict__ buffer,
+    int const periodic,
     uint2 const ext_nx, uint2 const int_nx,
     int const gcy0, int const gcy1 )
 {
-    // Find neighbours
     const int y_coord = blockIdx.y;
     const int x_coord = blockIdx.x;
-
-    const int y_lcoord  = ((y_coord > 0)? y_coord : gridDim.y) - 1;
-    const int y_ucoord  = ((y_coord < gridDim.y-1)? y_coord : 0) + 1;
-
     const int tile_vol = ext_nx.x * ext_nx.y;
-
     float3 * __restrict__ local   = buffer + (y_coord  * gridDim.x + x_coord ) * tile_vol;
-    float3 * __restrict__ y_lower = buffer + (y_lcoord * gridDim.x + x_coord ) * tile_vol;
-    float3 * __restrict__ y_upper = buffer + (y_ucoord * gridDim.x + x_coord ) * tile_vol;
 
-    // j = [0 .. gcy0[
-    // i = [0 .. ext_nx.x[
-    for( int idx = threadIdx.x; idx < gcy0 * ext_nx.x; idx += blockDim.x ) {
-        const int i = idx % ext_nx.x;
-        const int j = idx / ext_nx.x;
-        local[ i + j * ext_nx.x ] = y_lower[ i + (int_nx.y+j) * ext_nx.x ];
+    // Find neighbours
+    int y_lcoord = y_coord - 1;
+    int y_ucoord = y_coord + 1;
+
+    if ( periodic ) {
+        if ( y_lcoord < 0 ) y_lcoord += gridDim.y;
+        if ( y_ucoord > gridDim.x-1 ) y_ucoord -= gridDim.y;
     }
 
-    // j = [0 .. gcy1[
-    // i = [0 .. ext_nx.x[
-    for( int idx = threadIdx.x; idx < gcy1 * ext_nx.x; idx += blockDim.x ) {
-        const int i = idx % ext_nx.x;
-        const int j = idx / ext_nx.x;
-        local[ i + ( gcy0 + int_nx.y + j ) * ext_nx.x ] = y_upper[ i + ( gcy0 + j ) * ext_nx.x ];
+    // Copy data to lower guard cells
+    if ( y_lcoord >= 0 ) {
+        float3 * __restrict__ y_lower = buffer + (y_lcoord * gridDim.x + x_coord ) * tile_vol;
+        // j = [0 .. gcy0[
+        // i = [0 .. ext_nx.x[
+        for( int idx = threadIdx.x; idx < gcy0 * ext_nx.x; idx += blockDim.x ) {
+            const int i = idx % ext_nx.x;
+            const int j = idx / ext_nx.x;
+            local[ i + j * ext_nx.x ] = y_lower[ i + (int_nx.y+j) * ext_nx.x ];
+        }
+    }
+
+    // Copy data to upper guard cells
+    if ( y_ucoord < gridDim.y ) {
+        float3 * __restrict__ y_upper = buffer + (y_ucoord * gridDim.x + x_coord ) * tile_vol;
+        // j = [0 .. gcy1[
+        // i = [0 .. ext_nx.x[
+        for( int idx = threadIdx.x; idx < gcy1 * ext_nx.x; idx += blockDim.x ) {
+            const int i = idx % ext_nx.x;
+            const int j = idx / ext_nx.x;
+            local[ i + ( gcy0 + int_nx.y + j ) * ext_nx.x ] = y_upper[ i + ( gcy0 + j ) * ext_nx.x ];
+        }
     }
 }
 
@@ -371,7 +393,7 @@ void _copy_gcy_kernel(
  * 
  */
 __host__
-void VectorField::copy_to_gc() {
+void VectorField::copy_to_gc( ) {
 
     uint2 ext = ext_nx();
 
@@ -379,11 +401,11 @@ void VectorField::copy_to_gc() {
     dim3 grid( ntiles.x, ntiles.y );
 
     _copy_gcx_kernel <<< grid, block >>> (
-        d_buffer, ext, nx, gc[0].x, gc[1].x
+        d_buffer, periodic.x, ext, nx, gc[0].x, gc[1].x
     );
 
     _copy_gcy_kernel <<< grid, block >>> (
-        d_buffer, ext, nx, gc[0].y, gc[1].y
+        d_buffer, periodic.y, ext, nx, gc[0].y, gc[1].y
     );
 };
 
@@ -394,6 +416,7 @@ void VectorField::copy_to_gc() {
  * Values from neighbouring tile guard cells are added to local tile
  * 
  * @param buffer    Global data buffer (no offset)
+ * @param periodic  Use periodic boundaries along x
  * @param ext_nx    External tile size
  * @param int_nx    Internal tile size
  * @param gcx0      Number of guard cells at the lower x boundary
@@ -401,43 +424,53 @@ void VectorField::copy_to_gc() {
  */
 __global__
 void _add_gcx_kernel(
-    float3 * const __restrict__ buffer, 
+    float3 * const __restrict__ buffer,
+    int const periodic,
     uint2 const ext_nx, uint2 const int_nx,
     int const gcx0, int const gcx1 )
 {
-    // Find neighbours
     const int y_coord = blockIdx.y;
     const int x_coord = blockIdx.x;
-
-    const int x_lcoord  = ((x_coord > 0)? x_coord : gridDim.x) - 1;
-    const int x_ucoord  = ((x_coord < gridDim.x-1)? x_coord : 0) + 1;
-
     const int tile_vol = ext_nx.x * ext_nx.y;
-
     float3 * __restrict__ local   = buffer + (y_coord * gridDim.x + x_coord ) * tile_vol;
-    float3 * __restrict__ x_lower = buffer + (y_coord * gridDim.x + x_lcoord) * tile_vol;
-    float3 * __restrict__ x_upper = buffer + (y_coord * gridDim.x + x_ucoord) * tile_vol;
 
-    // j = [0 .. ext_nx.y[
-    // i = [0 .. gc1[
-    for( int idx = threadIdx.x; idx < ext_nx.y * gcx1; idx += blockDim.x ) {
-        const int i = idx % gcx1;
-        const int j = idx / gcx1;
-        float3 a = local[ gcx0 + i + j * ext_nx.x ];
-        float3 b = x_lower[ gcx0 + int_nx.x + i + j * ext_nx.x ];
-        a.x += b.x; a.y += b.y; a.z += b.z;
-        local[ gcx0 + i + j * ext_nx.x ] = a;
+    // Find neighbours
+    int x_lcoord = x_coord - 1;
+    int x_ucoord = x_coord + 1;
+
+    if ( periodic ) {
+        if ( x_lcoord < 0 ) x_lcoord += gridDim.x;
+        if ( x_ucoord > gridDim.x-1 ) x_ucoord -= gridDim.x;
     }
 
-    // j = [0 .. ext_nx.y[
-    // i = [0 .. gc0[
-    for( int idx = threadIdx.x; idx < ext_nx.y * gcx0; idx += blockDim.x ) {
-        const int i = idx % gcx0;
-        const int j = idx / gcx0;
-        float3 a = local[ int_nx.x - gcx0 + i + j * ext_nx.x ];
-        float3 b = x_upper[ i + j * ext_nx.x ];
-        a.x += b.x; a.y += b.y; a.z += b.z;
-        local[ int_nx.x - gcx0 + i + j * ext_nx.x ] = a;
+    if ( x_lcoord >= 0 ) {
+        float3 * __restrict__ x_lower = buffer + (y_coord * gridDim.x + x_lcoord) * tile_vol;
+
+        // j = [0 .. ext_nx.y[
+        // i = [0 .. gc1[
+        for( int idx = threadIdx.x; idx < ext_nx.y * gcx1; idx += blockDim.x ) {
+            const int i = idx % gcx1;
+            const int j = idx / gcx1;
+            float3 a = local[ gcx0 + i + j * ext_nx.x ];
+            float3 b = x_lower[ gcx0 + int_nx.x + i + j * ext_nx.x ];
+            a.x += b.x; a.y += b.y; a.z += b.z;
+            local[ gcx0 + i + j * ext_nx.x ] = a;
+        }
+    }
+
+    if ( x_ucoord < gridDim.x ) {
+        float3 * __restrict__ x_upper = buffer + (y_coord * gridDim.x + x_ucoord) * tile_vol;
+
+        // j = [0 .. ext_nx.y[
+        // i = [0 .. gc0[
+        for( int idx = threadIdx.x; idx < ext_nx.y * gcx0; idx += blockDim.x ) {
+            const int i = idx % gcx0;
+            const int j = idx / gcx0;
+            float3 a = local[ int_nx.x - gcx0 + i + j * ext_nx.x ];
+            float3 b = x_upper[ i + j * ext_nx.x ];
+            a.x += b.x; a.y += b.y; a.z += b.z;
+            local[ int_nx.x - gcx0 + i + j * ext_nx.x ] = a;
+        }
     }
 }
 
@@ -447,6 +480,7 @@ void _add_gcx_kernel(
  * Values from neighbouring tile guard cells are added to local tile
  * 
  * @param buffer    Global data buffer (no offset)
+ * @param periodic  Use periodic boundaries along y
  * @param ext_nx    External tile size
  * @param int_nx    Internal tile size
  * @param gcy0      Number of guard cells at the lower y boundary
@@ -455,42 +489,51 @@ void _add_gcx_kernel(
 __global__
 void _add_gcy_kernel(
     float3 * const __restrict__ buffer,
+    int const periodic,
     uint2 const ext_nx, uint2 const int_nx,
     const int gcy0, const int gcy1 )
 {
-    // Find neighbours
     const int y_coord = blockIdx.y;
     const int x_coord = blockIdx.x;
-
-    const int y_lcoord  = ((y_coord > 0)? y_coord : gridDim.y) - 1;
-    const int y_ucoord  = ((y_coord < gridDim.y-1)? y_coord : 0) + 1;
-
     const int tile_vol = ext_nx.x * ext_nx.y;
-
     float3 * __restrict__ local   = buffer + (y_coord  * gridDim.x + x_coord ) * tile_vol;
-    float3 * __restrict__ y_lower = buffer + (y_lcoord * gridDim.x + x_coord ) * tile_vol;
-    float3 * __restrict__ y_upper = buffer + (y_ucoord * gridDim.x + x_coord ) * tile_vol;
 
-    // j = [0 .. gcy1[
-    // i = [0 .. ext_nx.x[
-    for( int idx = threadIdx.x; idx < gcy1 * ext_nx.x; idx += blockDim.x ) {
-        const int i = idx % ext_nx.x;
-        const int j = idx / ext_nx.x;
-        float3 a = local[ i + (j + gcy0) * ext_nx.x ];
-        float3 b = y_lower[ i + (gcy0 + int_nx.y + j) * ext_nx.x ];
-        a.x += b.x; a.y += b.y; a.z += b.z;
-        local[ i + (j + gcy0) * ext_nx.x ] = a;
+    // Find neighbours
+    int y_lcoord = y_coord - 1;
+    int y_ucoord = y_coord + 1;
+
+    if ( periodic ) {
+        if ( y_lcoord < 0 ) y_lcoord += gridDim.y;
+        if ( y_ucoord > gridDim.x-1 ) y_ucoord -= gridDim.y;
     }
 
-    // j = [0 .. gcy0[
-    // i = [0 .. ext_nx.x[
-    for( int idx = threadIdx.x; idx < gcy0 * ext_nx.x; idx += blockDim.x ) {
-        const int i = idx % ext_nx.x;
-        const int j = idx / ext_nx.x;
-        float3 a = local[ i + ( int_nx.y - gcy0 + j ) * ext_nx.x ];
-        float3 b = y_upper[ i + j * ext_nx.x ];
-        a.x += b.x; a.y += b.y; a.z += b.z;
-        local[ i + ( int_nx.y - gcy0 + j ) * ext_nx.x ] = a;
+    if ( y_lcoord >= 0 ) {
+        float3 * __restrict__ y_lower = buffer + (y_lcoord * gridDim.x + x_coord ) * tile_vol;
+
+        // j = [0 .. gcy1[
+        // i = [0 .. ext_nx.x[
+        for( int idx = threadIdx.x; idx < gcy1 * ext_nx.x; idx += blockDim.x ) {
+            const int i = idx % ext_nx.x;
+            const int j = idx / ext_nx.x;
+            float3 a = local[ i + (j + gcy0) * ext_nx.x ];
+            float3 b = y_lower[ i + (gcy0 + int_nx.y + j) * ext_nx.x ];
+            a.x += b.x; a.y += b.y; a.z += b.z;
+            local[ i + (j + gcy0) * ext_nx.x ] = a;
+        }
+    }
+
+    if ( y_ucoord < gridDim.y ) {
+        float3 * __restrict__ y_upper = buffer + (y_ucoord * gridDim.x + x_coord ) * tile_vol;
+        // j = [0 .. gcy0[
+        // i = [0 .. ext_nx.x[
+        for( int idx = threadIdx.x; idx < gcy0 * ext_nx.x; idx += blockDim.x ) {
+            const int i = idx % ext_nx.x;
+            const int j = idx / ext_nx.x;
+            float3 a = local[ i + ( int_nx.y - gcy0 + j ) * ext_nx.x ];
+            float3 b = y_upper[ i + j * ext_nx.x ];
+            a.x += b.x; a.y += b.y; a.z += b.z;
+            local[ i + ( int_nx.y - gcy0 + j ) * ext_nx.x ] = a;
+        }
     }
 }
 
@@ -499,7 +542,7 @@ void _add_gcy_kernel(
  * 
  */
 __host__
-void VectorField::add_from_gc()
+void VectorField::add_from_gc( )
 {
     uint2 ext = ext_nx();
 
@@ -507,14 +550,78 @@ void VectorField::add_from_gc()
     dim3 grid( ntiles.x, ntiles.y );
 
     _add_gcx_kernel <<< grid, block >>> (
-        d_buffer, ext, nx, gc[0].x, gc[1].x
+        d_buffer, periodic.x, ext, nx, gc[0].x, gc[1].x
     );
 
     _add_gcy_kernel <<< grid, block >>> (
-        d_buffer, ext, nx, gc[0].y, gc[1].y
+        d_buffer, periodic.y, ext, nx, gc[0].y, gc[1].y
     );
-};
+}
 
+__global__
+/**
+ * @brief CUDA kernel for left shifting grid data
+ * 
+ * @param shift     Number of cells to shift
+ * @param buffer    Global data buffer
+ * @param ext_nx    External tile size
+ */
+void _x_shift_left_kernel( unsigned int const shift, float3 * const __restrict__ buffer, uint2 const ext_nx )
+{
+    extern __shared__ float3 local[];
+
+    auto block = cg::this_thread_block();
+
+    unsigned int offset = ( blockIdx.y * gridDim.x + blockIdx.x ) * (ext_nx.x * ext_nx.y);
+
+    // j = [0 .. ext_nx.y[
+    // i = [0 .. ext_nx.x[
+    for( int idx = threadIdx.x; idx < ext_nx.y * ext_nx.x; idx += blockDim.x ) {
+        const int i = idx % ext_nx.x;
+        const int j = idx / ext_nx.x;
+        if ( i < ext_nx.x - shift ) {
+            local[ i + j * ext_nx.x ] = buffer[ offset + (i + shift) + j * ext_nx.x ];
+        } else {
+            local[ i + j * ext_nx.x ] = make_float3( 0., 0., 0. );
+        }
+    }
+
+    block.sync();
+
+    for( int idx = threadIdx.x; idx < ext_nx.y * ext_nx.x; idx += blockDim.x ) {
+        buffer[ offset + idx ] = local[ idx ];
+    }
+
+}
+
+__host__
+/**
+ * @brief Shift data left by the specified amount injecting zeros
+ * 
+ * Note: this operation is only allowed if the number of upper x guard cells
+ *      is greater or equal to the requested shift
+ * 
+ * @param shift     Number of cells to shift
+ */
+void VectorField::x_shift_left( unsigned int const shift ) {
+
+    if ( gc[1].x >= shift ) {
+        uint2 ext = ext_nx();
+
+        dim3 block( 64 );
+        dim3 grid( ntiles.x, ntiles.y );
+
+        size_t shm_size = ext.x * ext.y * sizeof(float3);
+
+        _x_shift_left_kernel<<< grid, block, shm_size >>> ( shift, d_buffer, ext );
+
+        // Update x guard cells not changing lower and upper global guard cells
+        _copy_gcx_kernel <<<grid, block>>> ( d_buffer, 0, ext, nx, gc[0].x, gc[1].x );
+    } else {
+        std::cerr << "(*error*) VectorField::x_shift_left(), shift value too large, must be <= gc[1].x\n";
+        exit(1);
+    }
+}
 
 __host__
 /**

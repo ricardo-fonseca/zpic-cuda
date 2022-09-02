@@ -47,6 +47,8 @@ class Particles {
     uint2 ntiles;
     uint2 nx;       // Tile grid size (valid ix is in the range 0 .. nx-1)
 
+    int2 periodic;
+
     // Device data pointers
     int2 *ix;
     float2 *x;
@@ -101,6 +103,9 @@ class Particles {
      */
     void validate( std::string msg );
     void validate( std::string msg, int const over );
+
+    __host__
+    void cell_shift( int2 const shift );
 
     __host__
     /**

@@ -3,20 +3,24 @@
 
 #include "vector_field.cuh"
 #include "util.cuh"
+#include "moving_window.cuh"
 
 class Current {
 
-    public:
-
-    // Current density
-    VectorField * J;
-            
     // Simulation box info
     float2 box;
     float2 dx;
 
     // Time step
     float dt;
+
+    // Moving window information
+    MovingWindow moving_window;
+
+    public:
+
+    // Current density
+    VectorField * J;
 
     // Filtering parameters
     //Filter filter;
@@ -26,6 +30,25 @@ class Current {
 
     __host__ Current( uint2 const ntiles, uint2 const nx, float2 const box, float const dt );
     __host__ ~Current();
+
+    __host__
+    /**
+     * @brief Sets moving window algorithm
+     * 
+     * This method can only be called before the simulation has started (iter = 0)
+     * 
+     * @return int  0 on success, -1 on error
+     */
+    int set_moving_window() { 
+        if ( iter == 0 ) {
+            moving_window.init( dx.x );
+            J->periodic.x = false;
+            return 0;
+        } else {
+            std::cerr << "(*error*) set_moving_window() called with iter != 0\n";
+            return -1; 
+        }
+    }
 
     __host__ void advance();
     __host__ void zero();

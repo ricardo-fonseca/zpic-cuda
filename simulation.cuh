@@ -67,6 +67,13 @@ class Simulation {
         }
     };
 
+    void set_moving_window() {
+        emf -> set_moving_window();
+        current -> set_moving_window();
+        for (int i = 0; i < species.size(); i++)
+            species[i]->set_moving_window();
+    }
+
     /**
      * @brief Adds a new particle species to the simulation object
      * 
@@ -78,12 +85,14 @@ class Simulation {
      * @param ufl       Initial fluid velocity
      */
     void add_species( std::string const name, float const m_q, uint2 const ppc,
-        float const n0, density::parameters const & dens, float3 const uth, float3 const ufl ) {
-        Species * s = new Species( name, m_q, ppc, n0,
+        Density::Profile const & dens, float3 const uth, float3 const ufl )
+    {
+        Species * s = new Species( 
+            name, m_q, ppc, dens, 
             box, ntiles, nx, dt );
         species.push_back( s );
 
-        s -> inject_particles( dens );
+        s -> inject( );
         s -> set_u( uth, ufl );
     }
 

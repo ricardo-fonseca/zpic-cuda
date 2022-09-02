@@ -20,43 +20,8 @@
 #include "emf.cuh"
 #include "current.cuh"
 
-
-/**
- * @brief Density parameters
- * 
- */
-namespace density {
-    
-    namespace type {
-        enum dens { uniform, step, slab, sphere };
-    }
-
-    typedef struct parameters {
-        type::dens type;
-        float2 pos;
-        float radius;
-    } t_parameters;
-
-    static inline parameters uniform( ) { 
-        parameters d = { .type = type::uniform };
-        return d;
-    }
-
-    static inline parameters step( float const start ) { 
-        parameters d = { .type = type::step, .pos = make_float2(start,0) };
-        return d;
-    }
-
-    static inline parameters slab( float const start, float const finish ) { 
-        parameters d = { .type = type::slab, .pos = make_float2(start,finish) };
-        return d;
-    }
-
-    static inline parameters sphere( float2 const center, float const radius ) { 
-        parameters d = { .type = type::sphere, .pos = center, .radius = radius };
-        return d;
-    }
-}
+#include "density.cuh"
+#include "moving_window.cuh"
 
 namespace phasespace {
     enum quant { x, y, ux, uy, uz };
@@ -90,10 +55,11 @@ class Species {
 
 private:
 
-    float n0;
-
     uint2 ppc;
 
+    float n0;
+
+    Density::Profile * density;
 
     // Total kinetic energy per tile
     double * d_energy_tile;
@@ -107,19 +73,28 @@ private:
     float m_q;
 
     // Cell and simulation box size
-    float2 dx,  box;
+    float2 dx, box;
 
     // Time step
     float dt;
 
+    // Moving window information
+    MovingWindow moving_window;
+
+    __host__
+    void move_window_shift();
+
+    __host__
+    void move_window_inject();
+
     __host__
     void dep_phasespace( float * const d_data, 
-        phasespace::quant q, float2 const range, unsigned const size );
+        phasespace::quant q, float2 const range, unsigned const size ) const;
 
     __host__
     void dep_phasespace( float * const d_data,
         phasespace::quant quant0, float2 range0, unsigned const size0,
-        phasespace::quant quant1, float2 range1, unsigned const size1 );
+        phasespace::quant quant1, float2 range1, unsigned const size1 ) const;
 
 public:
 
@@ -133,14 +108,36 @@ public:
     Particles *particles;
 
     __host__
-    Species( std::string const name, float const m_q, uint2 const ppc, float const n0,
-        float2 const box, uint2 const ntiles, uint2 const nx, const float dt );
+    Species( std::string const name, float const m_q, 
+        uint2 const ppc, Density::Profile const & density,
+        float2 const box, uint2 const ntiles, uint2 const nx,
+        const float dt );
     
     __host__
     ~Species();
 
     __host__
-    void inject_particles( density::parameters const & dens );
+    /**
+     * @brief Sets moving window algorithm
+     * 
+     * This method can only be called before the simulation has started (iter = 0)
+     * 
+     * @return int  0 on success, -1 on error
+     */
+    int set_moving_window() { 
+        if ( iter == 0 ) {
+            moving_window.init( dx.x );
+            particles->periodic.x = false;
+            return 0;
+        } else {
+            std::cerr << "(*error*) set_moving_window() called with iter != 0\n";
+            return -1; 
+        }
+    }
+
+    __host__
+    void inject();
+    void inject( bnd<unsigned int> range );
 
     __host__
     void set_u( float3 const uth, float3 const ufl );
@@ -178,13 +175,13 @@ public:
     void save_charge() const;
 
     __host__
-    void save_phasespace( 
-        phasespace::quant quant, float2 const range, unsigned size );
+    void save_phasespace ( 
+        phasespace::quant quant, float2 const range, unsigned size ) const;
 
     __host__
-    void save_phasespace( 
+    void save_phasespace ( 
         phasespace::quant quant0, float2 const range0, unsigned size0,
-        phasespace::quant quant1, float2 const range1, unsigned size1 );
+        phasespace::quant quant1, float2 const range1, unsigned size1 ) const;
 
     __host__
     void push( VectorField * const E, VectorField * const B );

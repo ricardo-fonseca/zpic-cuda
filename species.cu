@@ -53,12 +53,16 @@ float rgamma( const float3 u ) {
  * @param tnx 
  * @param dt 
  */
-Species::Species( std::string const name, float const m_q, uint2 const ppc, float const n0,
-        float2 const box, uint2 const ntiles, uint2 const nx, const float dt ) :
-        name(name), m_q(m_q), ppc(ppc), n0( fabsf(n0) ), box(box), dt(dt)
+Species::Species( std::string const name, float const m_q, 
+        uint2 const ppc, Density::Profile const & density,
+        float2 const box, uint2 const ntiles, uint2 const nx,
+        const float dt ) :
+        name(name), m_q(m_q), ppc(ppc), density(density.clone()), box(box), 
+        dt(dt)
 {
+
     // Set charge normalization factor
-    q = copysign( n0, m_q ) / (ppc.x * ppc.y);
+    q = copysign( density.get_n0() , m_q ) / (ppc.x * ppc.y);
     
     // Set cell size
     dx.x = box.x / (nx.x * ntiles.x);
@@ -86,6 +90,8 @@ Species::~Species() {
 
     delete( tmp );
     delete( particles );
+
+    delete( density );
 
 }
 
@@ -141,298 +147,66 @@ void Species::set_u( float3 const uth, float3 const ufl ) {
 }
 
 
-/**
- * @brief CUDA kernel for injecting uniform profile
- * 
- * This version does not require atomics
- * 
- * @param nx
- * @param ppc 
- * @param d_tile 
- * @param d_ix 
- * @param d_x 
- * @param d_u
- */
-__global__ 
-void _inject_uniform_kernel(
-    uint2 const ppc, uint2 const nx, 
-    t_part_tile * const __restrict__ d_tiles,
-    int2 * __restrict__ d_ix, float2 * __restrict__ d_x, float3 * __restrict__ d_u )
-{
-    // Tile ID
-    const int tid = blockIdx.y * gridDim.x + blockIdx.x;
-    
-    // Pointers to tile particle buffers
-    const int offset =  d_tiles[ tid ].pos;
-    int2   __restrict__ *ix = &d_ix[ offset ];
-    float2 __restrict__ *x  = &d_x[ offset ];
-    float3 __restrict__ *u  = &d_u[ offset ];
-    
-    const int np = d_tiles[ tid ].n;
-
-    const int np_cell = ppc.x * ppc.y;
-
-    double dpcx = 1.0 / ppc.x;
-    double dpcy = 1.0 / ppc.y;
-
-    // Each thread takes 1 cell
-    for( int idx = threadIdx.x; idx < nx.x*nx.y; idx += blockDim.x ) {
-        int2 const cell = make_int2( 
-            idx % nx.x,
-            idx / nx.x
-        );
-
-        int part_idx = np + idx * np_cell;
-
-        for( int i1 = 0; i1 < ppc.y; i1++ ) {
-            for( int i0 = 0; i0 < ppc.x; i0++) {
-                float2 const pos = make_float2(
-                    dpcx * ( i0 + 0.5 ) - 0.5,
-                    dpcy * ( i1 + 0.5 ) - 0.5
-                );
-                ix[ part_idx ] = cell;
-                x[ part_idx ] = pos;
-                u[ part_idx ] = {0};
-                part_idx++;
-            }
-        }
-    }
-
-    // Update global number of particles in tile
-    if ( threadIdx.x == 0 )
-        d_tiles[ tid ].n = np + nx.x * nx.y * np_cell ;
-
-}
-
 
 /**
- * @brief CUDA kernel for injecting step profile
+ * @brief Inject particles in the complete simulation box
  * 
- * This kernel must be launched using a 2D grid with 1 block per tile
- * 
- * @param step      Step position normalized to cell size
- * @param ppc       Number of particles per cell
- * @param nx        Tile size
- * @param d_tiles    Tile information
- * @param d_ix      Particle buffer (cells)
- * @param d_x       Particle buffer (positions)
- * @param d_u       Particle buffer (momenta)
  */
-__global__
-void _inject_step_kernel(
-    const float step, const uint2 ppc, const uint2 nx,
-    t_part_tile * const __restrict__ d_tiles,
-    int2* __restrict__ d_ix, float2* __restrict__ d_x, float3* __restrict__ d_u ) {
+void Species::inject( ) {
 
-    const int tid = blockIdx.y * gridDim.x + blockIdx.x;
 
-    const int offset =  d_tiles[ tid ].pos;
-    int2   __restrict__ *ix = &d_ix[ offset ];
-    float2 __restrict__ *x  = &d_x[ offset ];
-    float3 __restrict__ *u  = &d_u[ offset ];
+    uint2 g_nx = particles -> g_nx();
 
-    double dpcx = 1.0 / ppc.x;
-    double dpcy = 1.0 / ppc.y;
+    bnd<unsigned int> range;
+    range.x = { .lower = 0, .upper = g_nx.x - 1 };
+    range.y = { .lower = 0, .upper = g_nx.y - 1 };
 
-    __shared__ int np;
-    np = d_tiles[ tid ].n;
+    float2 ref = make_float2( moving_window.motion(), 0 );
 
-    const int shiftx = blockIdx.x * nx.x;
-
-    for( int idx = threadIdx.x; idx < nx.y * nx.x; idx+= blockDim.x) {
-        int2 const cell = make_int2(
-            idx % nx.x,
-            idx / nx.x
-        );
-        for( int i1 = 0; i1 < ppc.y; i1++ ) {
-            for( int i0 = 0; i0 < ppc.x; i0++) {
-                float2 const pos = make_float2(
-                    dpcx * ( i0 + 0.5 ) - 0.5,
-                    dpcy * ( i1 + 0.5 ) - 0.5
-                );
-                auto t = (shiftx + cell.x) + (pos.x + 0.5);
-                if ( t > step ) {
-                    const int k = atomicAdd( &np, 1 );
-                    ix[ k ] = cell;
-                    x[ k ] = pos;
-                    u[ k ] = {0};
-                }
-            }
-        }
-    }
-
-    __syncthreads();
-
-    if ( threadIdx.x == 0 )
-        d_tiles[ tid ].n = np;
+    density -> inject( particles, ppc, dx, ref, range );
 }
 
 /**
- * @brief CUDA kernel for injecting slab profile
+ * @brief Inject particles in a specific cell range
  * 
- * This kernel must be launched using a 2D grid with 1 block per tile
- * 
- * @param slab      slab start/end position normalized to cell size
- * @param ppc       Number of particles per cell
- * @param nx        Tile size
- * @param d_tiles    Tile information
- * @param d_ix      Particle buffer (cells)
- * @param d_x       Particle buffer (positions)
- * @param d_u       Particle buffer (momenta)
  */
-__global__
-void _inject_slab_kernel(
-    const float start, const float finish, uint2 ppc, uint2 nx,
-    t_part_tile * const __restrict__ d_tiles,
-    int2* __restrict__ d_ix, float2* __restrict__ d_x, float3* __restrict__ d_u
-) {
+void Species::inject( bnd<unsigned int> range ) {
 
-    const int tid = blockIdx.y * gridDim.x + blockIdx.x;
+    float2 ref = make_float2( moving_window.motion(), 0 );
 
-    const int offset =  d_tiles[ tid ].pos;
-    int2   __restrict__ *ix = &d_ix[ offset ];
-    float2 __restrict__ *x  = &d_x[ offset ];
-    float3 __restrict__ *u  = &d_u[ offset ];
-
-    double dpcx = 1.0 / ppc.x;
-    double dpcy = 1.0 / ppc.y;
-
-    __shared__ int np;
-    np = d_tiles[ tid ].n;
-
-    const int shiftx = blockIdx.x * nx.x;
-
-    for( int idx = threadIdx.x; idx < nx.y * nx.x; idx+= blockDim.x) {
-        int2 const cell = make_int2(
-            idx % nx.x,
-            idx / nx.x
-        );
-        for( int i1 = 0; i1 < ppc.y; i1++ ) {
-            for( int i0 = 0; i0 < ppc.x; i0++) {
-                float2 const pos = make_float2(
-                    dpcx * ( i0 + 0.5 ) - 0.5,
-                    dpcy * ( i1 + 0.5 ) - 0.5
-                );
-                auto t = (shiftx + cell.x) + (pos.x + 0.5);
-                if ((t > start) && (t<finish )) {
-                    const int k = atomicAdd( &np, 1 );
-                    ix[ k ] = cell;
-                    x[ k ] = pos;
-                    u[ k ] = {0};
-                }
-            }
-        }
-    }
-
-    __syncthreads();
-
-    if ( threadIdx.x == 0 )
-        d_tiles[ tid ].n = np;
+    density -> inject( particles, ppc, dx, ref, range );
 }
 
 /**
- * @brief CUDA kernel for injecting sphere profile
+ * @brief Move simulation window - shift particles
  * 
- * This kernel must be launched using a 2D grid with 1 block per tile
+ * When using a moving simulation window checks if a window move is due
+ * at the current iteration and if so shifts left particle cells
  * 
- * @param center    sphere center in simulation units
- * @param radius    sphere radius in simulation units
- * @param dx        cell size in simulation units
- * @param ppc       Number of particles per cell
- * @param nx        Tile size
- * @param d_tiles   Tile information
- * @param d_ix      Particle buffer (cells)
- * @param d_x       Particle buffer (positions)
- * @param d_u       Particle buffer (momenta)
  */
-__global__
-void _inject_sphere_kernel(
-    float2 center, float radius, float2 dx, uint2 ppc, uint2 nx,
-    t_part_tile * const __restrict__ d_tiles,
-    int2* __restrict__ d_ix, float2* __restrict__ d_x, float3* __restrict__ d_u
-) {
+void Species::move_window_shift() {
 
-    const int tid = blockIdx.y * gridDim.x + blockIdx.x;
+    if ( moving_window.needs_move( iter * dt ) ) {
+        // Shift particles left 1 cell
+        particles -> cell_shift( make_int2(-1,0) );
 
-    const int offset =  d_tiles[ tid ].pos;
-    int2   __restrict__ *ix = &d_ix[ offset ];
-    float2 __restrict__ *x  = &d_x[ offset ];
-    float3 __restrict__ *u  = &d_u[ offset ];
-
-    double dpcx = 1.0 / ppc.x;
-    double dpcy = 1.0 / ppc.y;
-
-    __shared__ int np;
-    np = d_tiles[ tid ].n;
-
-    const int shiftx = blockIdx.x * nx.x;
-    const int shifty = blockIdx.y * nx.y;
-    const float r2 = radius*radius;
-
-    for( int idx = threadIdx.x; idx < nx.y * nx.x; idx+= blockDim.x) {
-        int2 const cell = make_int2( 
-            idx % nx.x,
-            idx / nx.x
-        );
-        for( int i1 = 0; i1 < ppc.y; i1++ ) {
-            for( int i0 = 0; i0 < ppc.x; i0++) {
-                float2 const pos = make_float2(
-                    dpcx * ( i0 + 0.5 ) - 0.5,
-                    dpcy * ( i1 + 0.5 ) - 0.5
-                );
-                float gx = ((shiftx + cell.x) + (pos.x+0.5)) * dx.x;
-                float gy = ((shifty + cell.y) + (pos.y+0.5)) * dx.y;
-                
-                if ( (gx - center.x)*(gx - center.x) + (gy - center.y)*(gy - center.y) < r2 ) {
-                    const int k = atomicAdd( &np, 1 );
-                    ix[ k ] = cell;
-                    x[ k ] = pos;
-                    u[ k ] = {0};
-                }
-            }
-        }
+        moving_window.advance();
+        moving_window.needs_inject = true;
     }
-
-    __syncthreads();
-
-    if ( threadIdx.x == 0 )
-        d_tiles[ tid ].n = np;
 }
 
-/**
- * @brief Inject particles in the simulation box
- * 
- * Currently only injecting particles in the whole simulation box is supported.
- * 
- */
-void Species::inject_particles( density::parameters const & d ) {
+void Species::move_window_inject() {
 
-    // Create particles
-    dim3 grid( particles -> ntiles.x, particles -> ntiles.y );
-    dim3 block( 64 );
+    if ( moving_window.needs_inject ) {
+        uint2 g_nx = particles -> g_nx();
 
-    switch( d.type ) {
-    case density::type::uniform:
-        _inject_uniform_kernel <<< grid, block >>> ( 
-            ppc, particles -> nx, 
-            particles -> tiles, particles -> ix, particles -> x, particles -> u );
-        break;
-    case density::type::step:
-        _inject_step_kernel <<< grid, block >>> (
-            d.pos.x / dx.x, ppc, particles -> nx, 
-            particles -> tiles, particles -> ix, particles -> x, particles -> u );
-        break;
-    case density::type::slab:
-        _inject_slab_kernel <<< grid, block >>> (
-            d.pos.x / dx.x, d.pos.y / dx.x, ppc, particles -> nx, 
-            particles -> tiles,
-            particles -> ix, particles -> x, particles -> u  );
-        break;
-    case density::type::sphere:
-        _inject_sphere_kernel <<< grid, block >>> (
-            d.pos, d.radius, dx, ppc, particles -> nx, 
-            particles -> tiles, particles -> ix, particles -> x, particles -> u  );
-        break;
+        bnd<unsigned int> range;
+        range.x = { .lower = g_nx.x - 1, .upper = g_nx.x - 1 };
+        range.y = { .lower = 0, .upper = g_nx.y - 1 };
+
+        inject( range );
+
+        moving_window.needs_inject = false;
     }
 }
 
@@ -450,12 +224,19 @@ void Species::advance( EMF const &emf, Current &current ) {
     // Advance positions and deposit current
     move( current.J );
 
+    // Increase internal iteration number
+    iter++;
+
+    // Moving window - shift particles
+    move_window_shift();
+
     // Update tiles
     particles -> tile_sort( *tmp );
 
-    // Increase internal iteration number
-    iter++;
+    // Moving window - inject new particles
+    move_window_inject();
 }
+
 __device__
 /**
  * @brief Deposit (charge conserving) current for 1 segment inside a cell
@@ -828,6 +609,10 @@ void Species::move( )
 
 }
 
+namespace pusher {
+    enum type { boris, euler };
+}
+
 __device__
 /**
  * @brief Advance memntum using a relativistic Boris pusher.
@@ -852,13 +637,13 @@ __device__
  * @param u 
  * @return float3 
  */
-inline float3 dudt_boris( const float tem, float3 e, float3 b, float3 u)
+inline float3 dudt_boris( const float alpha, float3 e, float3 b, float3 u)
 {
 
     // First half of acceleration
-    e.x *= tem;
-    e.y *= tem;
-    e.z *= tem;
+    e.x *= alpha;
+    e.y *= alpha;
+    e.z *= alpha;
 
     float3 ut = make_float3( 
         u.x + e.x,
@@ -866,15 +651,17 @@ inline float3 dudt_boris( const float tem, float3 e, float3 b, float3 u)
         u.z + e.z
     );
 
-    // Time centered tem / \gamma
-    const float tem_gamma = tem * rsqrtf( fmaf( ut.z, ut.z,
-                                          fmaf( ut.y, ut.y, 
-                                          fmaf( ut.x, ut.x, 1.0f ) ) ) );
+    {
+        // Time centered tem / \gamma
+        const float alpha_gamma = alpha * rsqrtf( fmaf( ut.z, ut.z,
+                                            fmaf( ut.y, ut.y, 
+                                            fmaf( ut.x, ut.x, 1.0f ) ) ) );
 
-    // Rotation
-    b.x *= tem_gamma;
-    b.y *= tem_gamma;
-    b.z *= tem_gamma;
+        // Rotation
+        b.x *= alpha_gamma;
+        b.y *= alpha_gamma;
+        b.z *= alpha_gamma;
+    }
 
     u.x = fmaf( b.z, ut.y, ut.x );
     u.y = fmaf( b.x, ut.z, ut.y );
@@ -884,13 +671,15 @@ inline float3 dudt_boris( const float tem, float3 e, float3 b, float3 u)
     u.y = fmaf( -b.z, ut.x, u.y );
     u.z = fmaf( -b.x, ut.y, u.z );
 
-    const float otsq = 2.0f / fmaf( b.z, b.z,
-                              fmaf( b.y, b.y, 
-                              fmaf( b.x, b.x, 1.0f ) ) );
-    
-    b.x *= otsq;
-    b.y *= otsq;
-    b.z *= otsq;
+    {
+        const float otsq = 2.0f / fmaf( b.z, b.z,
+                                fmaf( b.y, b.y, 
+                                fmaf( b.x, b.x, 1.0f ) ) );
+        
+        b.x *= otsq;
+        b.y *= otsq;
+        b.z *= otsq;
+    }
 
     ut.x = fmaf( b.z, u.y, ut.x );
     ut.y = fmaf( b.x, u.z, ut.y );
@@ -906,6 +695,77 @@ inline float3 dudt_boris( const float tem, float3 e, float3 b, float3 u)
     ut.z += e.z;
 
     return ut;
+}
+
+__device__
+/**
+ * @brief Advance memntum using a relativistic Boris pusher for high magnetic fields
+ * 
+ * This is similar to the dudt_boris method above, but the rotation is done using
+ * using an exact Euler-Rodriguez method.2
+ * 
+ * @param tem 
+ * @param e 
+ * @param b 
+ * @param u 
+ * @return float3 
+ */
+inline float3 dudt_boris_euler( const float alpha, float3 e, float3 b, float3 u)
+{
+
+    // First half of acceleration
+    e.x *= alpha;
+    e.y *= alpha;
+    e.z *= alpha;
+
+    float3 ut = make_float3( 
+        u.x + e.x,
+        u.y + e.y,
+        u.z + e.z
+    );
+
+    {
+        float const alpha2_gamma = alpha * 2 * 
+            rsqrtf( fmaf( ut.z, ut.z, fmaf( ut.y, ut.y, fmaf( ut.x, ut.x, 1.0f ) ) ) );
+
+        b.x *= alpha2_gamma;
+        b.y *= alpha2_gamma;
+        b.z *= alpha2_gamma;
+    }
+
+    {
+        float const bnorm = sqrtf(fmaf( b.x, b.x, fmaf( b.y, b.y, b.z * b.z ) ));
+        float const s = -(( bnorm > 0 ) ? sinf( bnorm / 2 ) / bnorm : 1 );
+
+        float const ra = cosf( bnorm / 2 );
+        float const rb = b.x * s;
+        float const rc = b.y * s;
+        float const rd = b.z * s;
+
+        float const r11 =   fmaf(ra,ra,rb*rb)-fmaf(rc,rc,rd*rd);
+        float const r12 = 2*fmaf(rb,rc,ra*rd);
+        float const r13 = 2*fmaf(rb,rd,-ra*rc);
+
+        float const r21 = 2*fmaf(rb,rc,-ra*rd);
+        float const r22 =   fmaf(ra,ra,rc*rc)-fmaf(rb,rb,rd*rd);
+        float const r23 = 2*fmaf(rc,rd,ra*rb);
+
+        float const r31 = 2*fmaf(rb,rd,ra*rc);
+        float const r32 = 2*fmaf(rc,rd,-ra*rb);
+        float const r33 =   fmaf(ra,ra,rd*rd)-fmaf(rb,rb,-rc*rc);
+
+        u.x = fmaf( r11, ut.x, fmaf( r21, ut.y , r31 * ut.z ));
+        u.y = fmaf( r12, ut.x, fmaf( r22, ut.y , r32 * ut.z ));
+        u.z = fmaf( r12, ut.x, fmaf( r23, ut.y , r33 * ut.z ));
+    }
+
+
+    // Second half of acceleration
+    u.x += e.x;
+    u.y += e.y;
+    u.z += e.z;
+
+    return u;
 }
 
 __device__
@@ -973,31 +833,31 @@ void interpolate_fld(
           ( B[ih + (jh+1)*stride].z * s0xh + B[ih+1 + (jh+1)*stride].z * s1xh ) * s1yh;
 }
 
-__global__
+
 /**
  * @brief CUDA kernel for pushing particles
  * 
  * This kernel will interpolate fields and advance particle momentum using a 
  * relativistic Boris pusher
  * 
- * @param d_tile 
- * @param d_ix 
- * @param d_x 
- * @param d_u 
- * @param d_E 
- * @param d_B 
- * @param field_offset 
- * @param ext_nx 
- * @param dt_dx 
- * @param q 
- * @param qnx 
+ * @param d_tiles       Particle tile information
+ * @param d_ix          Particle data (cells)
+ * @param d_x           Particle data (positions)
+ * @param d_u           Particle data (momenta)
+ * @param d_E           E field grid
+ * @param d_B           B field grid
+ * @param field_offset  Tile offset to field position (0,0)
+ * @param ext_nx        E,B tile grid external size
+ * @param alpha         Force normalization ( 0.5 * q / m * dt )
  */
+template < pusher::type type >
+__global__
 void _push_kernel ( 
     t_part_tile const * const __restrict__ d_tiles,
     int2* __restrict__ d_ix, float2* __restrict__ d_x, float3* __restrict__ d_u,
     float3 * __restrict__ d_E, float3 * __restrict__ d_B, 
     unsigned int const field_offset, uint2 const ext_nx,
-    float const tem )
+    float const alpha )
 {
     auto block = cg::this_thread_block();
     
@@ -1036,7 +896,9 @@ void _push_kernel (
         
         // Advance momentum
         float3 pu = u[i];
-        u[i] = dudt_boris( tem, e, b, pu );;
+        
+        if ( type == pusher::boris ) u[i] = dudt_boris( alpha, e, b, pu );
+        if ( type == pusher::euler ) u[i] = dudt_boris_euler( alpha, e, b, pu );
     }
 }
 
@@ -1059,17 +921,17 @@ void Species::push( VectorField * const E, VectorField * const B )
         q * dx.y / dt
     };
 
-    const float tem = 0.5 * dt / m_q;
 
     dim3 grid( particles -> ntiles.x, particles -> ntiles.y );
     dim3 block( 1024 );
     uint2 ext_nx = E -> ext_nx();
     size_t shm_size = 2 * ( ext_nx.x * ext_nx.y * sizeof(float3) );
 
-    _push_kernel <<< grid, block, shm_size >>> (
+    const float alpha = 0.5 * dt / m_q;
+    _push_kernel <pusher::euler> <<< grid, block, shm_size >>> (
         particles -> tiles, 
         particles -> ix, particles -> x, particles -> u,
-        E -> d_buffer, B -> d_buffer, E -> offset(), ext_nx, tem
+        E -> d_buffer, B -> d_buffer, E -> offset(), ext_nx, alpha
     );
 
 }
@@ -1221,8 +1083,8 @@ void Species::save_charge() const {
     zdf::grid_axis axis[2];
     axis[0] = (zdf::grid_axis) {
         .name = (char *) "x",
-        .min = 0.,
-        .max = box.x,
+        .min = 0. + moving_window.motion(),
+        .max = box.x + moving_window.motion(),
         .label = (char *) "x",
         .units = (char *) "c/\\omega_n"
     };
@@ -1320,7 +1182,7 @@ __host__
  * @param size      Phasespace grid size
  */
 void Species::dep_phasespace( float * const d_data, phasespace::quant quant, 
-    float2 range, unsigned const size )
+    float2 range, unsigned const size ) const
 {
     // Zero device memory
     auto err = cudaMemsetAsync( d_data, 0, size * sizeof(float) );
@@ -1384,7 +1246,7 @@ __host__
  * @param size      Phasespace grid size
  */
 void Species::save_phasespace( phasespace::quant quant, float2 const range, 
-    unsigned const size )
+    unsigned const size ) const
 {
     std::string qname, qlabel, qunits;
 
@@ -1398,6 +1260,11 @@ void Species::save_phasespace( phasespace::quant quant, float2 const range,
         .label = (char *) qlabel.c_str(),
         .units = (char *) qunits.c_str()
     };
+
+    if ( quant == phasespace::x ) {
+        axis.min += moving_window.motion();
+        axis.max += moving_window.motion();
+    }
 
     std::string pha_name  = name + "-" + qname;
     std::string pha_label = name + "\\,(" + qlabel+")";
@@ -1528,7 +1395,8 @@ __host__
 void Species::dep_phasespace( 
     float * const d_data,
     phasespace::quant quant0, float2 range0, unsigned const size0,
-    phasespace::quant quant1, float2 range1, unsigned const size1 ) {
+    phasespace::quant quant1, float2 range1, unsigned const size1 ) const
+{
 
     // Zero device memory
     auto err = cudaMemsetAsync( d_data, 0, size0 * size1 * sizeof(float) );
@@ -1643,10 +1511,11 @@ __host__
 void Species::save_phasespace( 
     phasespace::quant quant0, float2 const range0, unsigned const size0,
     phasespace::quant quant1, float2 const range1, unsigned const size1 )
+    const
 {
 
     if ( quant0 >= quant1 ) {
-        std::cerr << "(*error*) for 2D phasespaces, the 2nd quantity must be indexed higher thatn the first one\n";
+        std::cerr << "(*error*) for 2D phasespaces, the 2nd quantity must be indexed higher than the first one\n";
         return;
     }
 
@@ -1673,6 +1542,11 @@ void Species::save_phasespace(
             .units = (char *) qunits1.c_str()
         }
     };
+
+    if ( quant0 == phasespace::x ) {
+        axis[0].min += moving_window.motion();
+        axis[0].max += moving_window.motion();
+    }
 
 
     std::string pha_name  = name + "-" + qname0 + qname1;

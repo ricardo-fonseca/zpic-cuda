@@ -22,6 +22,8 @@ class VectorField {
     uint2 nx;            // Tile grid size
     uint2 gc[2];         // Tile guard cells
 
+    int2 periodic;
+
     __host__ VectorField( uint2 const ntiles, uint2 const nx, uint2 const gc[2]);
     __host__ VectorField( uint2 const ntiles, uint2 const nx );
     __host__ ~VectorField();
@@ -128,14 +130,18 @@ class VectorField {
      * 
      */
     __host__
-    void copy_to_gc();
+    void copy_to_gc( );
 
     __host__
     /**
      * @brief Adds values from neighboring guard cells to local data
      * 
      */
-    void add_from_gc();
+    void add_from_gc( );
+    
+    __host__
+    
+    void x_shift_left( unsigned int const shift );
 
     __host__
     /**

@@ -200,6 +200,10 @@ void EMF::advance() {
 
     // Advance internal iteration number
     iter += 1;
+
+    // Move simulation window if needed
+    if ( moving_window.active() ) move_window();
+
 }
 
 
@@ -332,11 +336,33 @@ void EMF::advance( Current & current ) {
     );
 
     // Update guard cells with new values
-    E -> copy_to_gc();
-    B -> copy_to_gc();
+    E -> copy_to_gc( );
+    B -> copy_to_gc( );
 
     // Advance internal iteration number
     iter += 1;
+
+    // Move simulation window if needed
+    move_window();
+}
+
+/**
+ * @brief Move simulation window
+ * 
+ * When using a moving simulation window checks if a window move is due
+ * at the current iteration and if so shifts left the data, zeroing the
+ * rightmost cells.
+ * 
+ */
+void EMF::move_window() {
+
+    if ( moving_window.needs_move( iter * dt ) ) {
+
+        E->x_shift_left(1);
+        B->x_shift_left(1);
+
+        moving_window.advance();
+    }
 }
 
 /**
@@ -350,8 +376,8 @@ void EMF::add_laser( Laser& laser ){
 
     std::cout << "(*info*) Adding laser..." << std::endl;
 
-    VectorField tmp_E( E -> g_nx(), E-> nx, E -> gc );
-    VectorField tmp_B( E -> g_nx(), B-> nx, B -> gc );
+    VectorField tmp_E( E -> ntiles, E-> nx, E -> gc );
+    VectorField tmp_B( E -> ntiles, B-> nx, B -> gc );
 
     // Get laser fields
     laser.launch( tmp_E, tmp_B, box );
@@ -401,8 +427,8 @@ void EMF::save( const emf::field field, fcomp::cart const fc ) {
     zdf::grid_axis axis[2];
     axis[0] = (zdf::grid_axis) {
     	.name = (char *) "x",
-    	.min = 0.0,
-    	.max = box.x,
+    	.min = 0.0 + moving_window.motion(),
+    	.max = box.x + moving_window.motion(),
     	.label = (char *) "x",
     	.units = (char *) "c/\\omega_n"
     };

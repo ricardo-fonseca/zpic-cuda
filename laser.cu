@@ -115,8 +115,7 @@ void _plane_wave_kernel( Laser laser,
     float3 * __restrict__ E, float3 * __restrict__ B,
     uint2 int_nx, uint2 ext_nx, float2 const dx )
 {
-    int    tile_id  = blockIdx.y * gridDim.x + blockIdx.x;
-    size_t tile_off = tile_id * ext_nx.x * ext_nx.y;
+    const int tile_off = (blockIdx.y * gridDim.x + blockIdx.x) * ( ext_nx.x * ext_nx.y );
 
     const int ix0 = blockIdx.x * int_nx.x;
 
@@ -133,7 +132,7 @@ void _plane_wave_kernel( Laser laser,
         float lenv   = amp * lon_env( laser, z   );
         float lenv_2 = amp * lon_env( laser, z_2 );
 
-        size_t const idx = tile_off + iy * ext_nx.x + ix;
+        const int idx = tile_off + iy * ext_nx.x + ix;
         
         E[ idx ] = make_float3(
             0,
@@ -172,10 +171,15 @@ int Laser::launch( VectorField& E, VectorField& B, float2 box ) {
     }
 
     uint2 g_nx = E.g_nx();
+
+    std::cout << "(*info*) g_nx = " << g_nx.x << " : " << g_nx.y << "\n";
+
     float2 dx = make_float2(
         box.x / g_nx.x,
         box.y / g_nx.y
     );
+
+    std::cout << "(*info*) dx = " << dx.x << " : " << dx.y << "\n";
 
     uint2 ext_nx = E.ext_nx();
     unsigned int offset = E.offset();
@@ -542,6 +546,8 @@ void div_corr_x(VectorField& E, VectorField& B, float2 const dx )
  */
 __host__
 int Gaussian::launch(VectorField& E, VectorField& B, float2 const box ) {
+
+    std::cout << "(*info*) Launching gaussian beam, omega0 = " << omega0 << std::endl;
 
     if ( validate() < 0 ) return -1;
 

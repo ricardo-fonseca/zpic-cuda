@@ -59,7 +59,7 @@ def grid1d( filename : str, xlim = None, grid : bool = None, scale = None ):
     plt.grid(True)
     plt.show()
 
-def grid2d( filename : str, xlim = None, ylim = None, grid = False, cmap = None,
+def grid2d( filename : str, xlim = None, ylim = None, grid = False, cmap = None, norm = None,
     vsim = False, vmin = None, vmax = None, scale = None ):
     """Generates a colormap plot from a 2D grid zdf file
 
@@ -109,13 +109,12 @@ def grid2d( filename : str, xlim = None, ylim = None, grid = False, cmap = None,
     if ( vsim ):
         amax = np.amax( np.abs(data) )
         plt.imshow( data, interpolation = 'nearest', origin = 'lower',
-            vmin = -amax, vmax = +amax,
+            vmin = -amax, vmax = +amax, norm = norm,
             extent = ( range[0][0], range[0][1], range[1][0], range[1][1] ),
             aspect = 'auto', cmap=cmap )
     else:
         plt.imshow( data, interpolation = 'nearest', origin = 'lower',
-            vmin = vmin, vmax = vmax, 
-            # norm=colors.SymLogNorm( vmin = vmin, vmax = vmax, linthresh = 0.0001 ),
+            vmin = vmin, vmax = vmax, norm = norm,
             extent = ( range[0][0], range[0][1], range[1][0], range[1][1] ),
             aspect = 'auto', cmap=cmap )
 
@@ -143,7 +142,7 @@ def grid2d( filename : str, xlim = None, ylim = None, grid = False, cmap = None,
 
     plt.show()
 
-def grid( filename : str, xlim = None, ylim = None, grid : bool = False, cmap = None,
+def grid( filename : str, xlim = None, ylim = None, grid : bool = False, cmap = None, norm = None,
     vsim = False, vmin = None, vmax = None, scale = None ):
     """Generates a plot from 1D or 2D grids.
 
@@ -168,7 +167,7 @@ def grid( filename : str, xlim = None, ylim = None, grid : bool = False, cmap = 
     elif ( info.grid.ndims == 1 ):
         grid1d( filename, xlim = xlim, grid = grid, scale = scale )
     elif ( info.grid.ndims == 2 ):
-        grid2d( filename, xlim = xlim, ylim = ylim, grid = grid, cmap = cmap,
+        grid2d( filename, xlim = xlim, ylim = ylim, grid = grid, cmap = cmap, norm = norm,
             vsim = vsim, vmin = vmin, vmax = vmax, scale = scale )
     else:
         print("(*error*) file {} - unsupported grid dimensions ({}).".format(filename, info.grid.ndims))

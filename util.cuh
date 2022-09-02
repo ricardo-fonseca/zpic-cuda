@@ -16,18 +16,41 @@ namespace coord {
     enum cart  { x = 0, y };
 }
 
+template < typename T >
+class bnd {
+    public:
+    
+    struct {
+        T lower;
+        T upper;
+    } x;
+    struct {
+        T lower;
+        T upper;
+    } y;
+
+    bnd() : x({0,0}), y({0,0}) {};
+};
+
 
 #ifndef M_PI
-#define M_PI        3.14159265358979323846264338327950288   ///< pi
+
+#define M_E          0x1.5bf0a8b145769p+1 // e
+#define M_LOG2E      0x1.71547652b82fep+0 // log2(e)
+#define M_LOG10E     0x1.bcb7b1526e50ep-2 // log10(e)
+#define M_LN2        0x1.62e42fefa39efp-1 // loge(2)
+#define M_LN10       0x1.26bb1bbb55516p+1 // loge(10)
+#define M_PI         0x1.921fb54442d18p+1 // pi
+#define M_PI_2       0x1.921fb54442d18p+0 // pi/2
+#define M_PI_4       0x1.921fb54442d18p-1 // pi/4
+#define M_1_PI       0x1.45f306dc9c883p-2 // 1/pi
+#define M_2_PI       0x1.45f306dc9c883p-1 // 2/pi
+#define M_2_SQRTPI   0x1.20dd750429b6dp+0 // 2/sqrt(pi)
+#define M_SQRT2      0x1.6a09e667f3bcdp+0 // sqrt(2)
+#define M_SQRT1_2    0x1.6a09e667f3bcdp-1 // sqrt(1/2)
+
 #endif
 
-#ifndef M_PI_2
-#define M_PI_2      1.57079632679489661923132169163975144   ///< pi/2
-#endif
-
-#ifndef M_PI_4
-#define M_PI_4      0.785398163397448309615660845819875721  ///< pi/4
-#endif
 
 #define CHECK_ERR( err_, msg_ ) { \
     if ( err_ != cudaSuccess ) { \

@@ -44,7 +44,7 @@ void _init_tiles_kernel( t_part_tile * const __restrict__ d_tiles,
  */
 __host__
 Particles::Particles(uint2 const ntiles, uint2 const nx, unsigned int const max_np_tile ) :
-    ntiles( ntiles ), nx( nx ), max_np_tile( max_np_tile )
+    ntiles( ntiles ), nx( nx ), max_np_tile( max_np_tile ), periodic( make_int2(1,1) )
 {    
     size_t size = ntiles.x * ntiles.y * max_np_tile;
     malloc_dev( ix, size );
@@ -407,7 +407,7 @@ void _bnd_out( int const lim,
 
     // Copy values that are moving to temp buffer
     {
-        int k2 , k1, k0;
+        int k2, k1, k0;
         for( int i = block.thread_rank(); i < size; i+= block.num_threads() ) {
             int key;
             
@@ -437,10 +437,10 @@ void _bnd_out( int const lim,
         }
     }
 
+    block.sync();
+
     __shared__ unsigned int _k;
     _k = nmove;
-
-    block.sync();
 
     // Fill holes left behind
     {
@@ -679,7 +679,8 @@ void _bnd_in( int const lim,
     t_part_tile * const __restrict__ d_tiles,
     int2 * __restrict__ d_ix, float2 * __restrict__ d_x, float3 * __restrict__ d_u,
     t_part_tile * const __restrict__ tmp_d_tiles,
-    int2 * __restrict__ tmp_d_ix, float2 * __restrict__ tmp_d_x, float3 * __restrict__ tmp_d_u )
+    int2 * __restrict__ tmp_d_ix, float2 * __restrict__ tmp_d_x, float3 * __restrict__ tmp_d_u,
+    int const periodic )
 {
 
     auto grid  = cg::this_grid(); 
@@ -694,11 +695,19 @@ void _bnd_in( int const lim,
     float3 __restrict__ *u  = &d_u[ offset ];
 
     // Copy from upper neighbour
-    {
-        int uid = tid;
-        
-        if ( dir == coord::x ) uid +=  1 - (( blockIdx.x < gridDim.x - 1 ) ? 0 : gridDim.x );
-        if ( dir == coord::y ) uid += (1 - (( blockIdx.y < gridDim.y - 1 ) ? 0 : gridDim.y )) * gridDim.x;
+    int x_ucoord = blockIdx.x;
+    int y_ucoord = blockIdx.y;
+    
+    if ( dir == coord::x )
+        x_ucoord += ( periodic && blockIdx.x == gridDim.x - 1 ) ? - (int) gridDim.x : 1;
+
+    if ( dir == coord::y )
+        y_ucoord += ( periodic && blockIdx.y == gridDim.y - 1 ) ? - (int) gridDim.y : 1;
+
+    if (( x_ucoord < gridDim.x ) && 
+        ( y_ucoord < gridDim.y )) {
+
+        int uid = y_ucoord * gridDim.x + x_ucoord;
 
         unsigned int nu = tmp_d_tiles[ uid ].n;
         const int upper_offset =  tmp_d_tiles[ uid ].pos;
@@ -720,12 +729,20 @@ void _bnd_in( int const lim,
     }
 
     // Copy from lower neighbour
-    {
-        int lid = tid;
-        
-        if ( dir == coord::x ) lid +=  (( blockIdx.x > 0 ) ? 0 : gridDim.x) - 1;
-        if ( dir == coord::y ) lid += ((( blockIdx.y > 0 ) ? 0 : gridDim.y) - 1) * gridDim.x;
+    int x_lcoord = blockIdx.x;
+    int y_lcoord = blockIdx.y;
 
+    if ( dir == coord::x )
+        x_lcoord += ( periodic && (blockIdx.x == 0) ) ? (int) gridDim.x : -1;
+
+    if ( dir == coord::y )
+        y_lcoord += ( periodic && (blockIdx.y == 0) ) ? (int) gridDim.y : -1;
+
+    if (( x_lcoord >= 0 ) && 
+        ( y_lcoord >= 0 )) {
+
+        int lid = y_lcoord * gridDim.x + x_lcoord;;
+        
         unsigned int k  = tmp_d_tiles[ lid ].n;
         unsigned int nl = tmp_d_tiles[ lid ].nb;
         const int lower_offset =  tmp_d_tiles[ lid ].pos;
@@ -749,10 +766,20 @@ void _bnd_in( int const lim,
     if ( block.thread_rank() == 0 ) d_tiles[ tid ].n = n0;
 }
 
-
+/**
+ * @brief Moves particles to the correct tiles
+ * 
+ * Note that particles are only expected to have moved no more than 1 tile
+ * in each direction
+ * 
+ * @param tmp   Temporary buffer to hold particles moving out of tiles. This
+ *              buffer *MUST* be big enough to hold all the particles moving
+ *              out of the tiles. It's size is not checked.
+ */
+__host__
 void Particles::tile_sort( Particles &tmp ) {
     dim3 grid( ntiles.x, ntiles.y );
-    dim3 block = dim3( 1024 );
+    dim3 block( 1024 );
 
     _bnd_out< coord::x > <<< grid, block >>> ( 
         nx.x, 
@@ -763,7 +790,8 @@ void Particles::tile_sort( Particles &tmp ) {
     _bnd_in< coord::x >  <<< grid, block >>> ( 
         nx.x,
         tiles, ix, x, u,
-        tmp.tiles, tmp.ix, tmp.x, tmp.u
+        tmp.tiles, tmp.ix, tmp.x, tmp.u,
+        periodic.x
     );
 
     _bnd_out< coord::y > <<< grid, block >>> ( 
@@ -775,7 +803,8 @@ void Particles::tile_sort( Particles &tmp ) {
     _bnd_in< coord::y >  <<< grid, block >>> ( 
         nx.y,
         tiles, ix, x, u,
-        tmp.tiles, tmp.ix, tmp.x, tmp.u
+        tmp.tiles, tmp.ix, tmp.x, tmp.u,
+        periodic.y
     );
 }
 
@@ -789,10 +818,49 @@ __host__
  */
 void Particles::tile_sort() {
 
+    // Create temporary buffer
     Particles tmp( ntiles, nx, max_np_tile );
+
     tile_sort( tmp );
 }
 
+__global__
+void _cell_shift( t_part_tile * tiles, 
+    int2 * const __restrict__ d_ix,
+    int2 const shift )
+{
+    int const tid = blockIdx.y * gridDim.x + blockIdx.x;
+
+    int const offset = tiles[ tid ].pos;
+    int const np     = tiles[ tid ].n;
+    int2 * const __restrict__ ix = &d_ix[ offset ];
+
+    for( int i = threadIdx.x; i < np; i += blockDim.x) {
+        int2 cell = ix[i];
+        cell.x += shift.x;
+        cell.y += shift.y;
+        ix[i] = cell;
+    }
+}
+
+/**
+ * @brief Shifts particle cells by the required amount
+ * 
+ * Cells are shited by adding the parameter `shift` to the particle cell
+ * indexes.
+ * 
+ * Note that this routine does not check if the particles are still inside the
+ * tile.
+ * 
+ * @param shift     Cell shift in both directions
+ */
+void Particles::cell_shift( int2 const shift ) {
+
+    dim3 grid( ntiles.x, ntiles.y );
+    dim3 block( 1024 );
+
+    _cell_shift <<< grid, block >>> ( tiles, ix, shift );
+}
 
 #define __ULIM __FLT_MAX__
 
@@ -839,11 +907,11 @@ void _validate( t_part_tile * tiles,
         int err = 0;
 
         if ( (ix[i].x < lb.x) || (ix[i].x >= ub.x )) {
-            printf("(*error*) Invalid ix[%d].x position (%d), range = [%d,%d]\n", i, ix[i].x, lb.x, ub.x );
+            printf("(*error*) Invalid ix[%d].x position (%d), range = [%d,%d[\n", i, ix[i].x, lb.x, ub.x );
             err = 1;
         }
         if ( (ix[i].y < lb.y) || (ix[i].y >= ub.y )) {
-            printf("(*error*) Invalid ix[%d].y position (%d), range = [%d,%d]\n", i, ix[i].y, lb.y, ub.y );
+            printf("(*error*) Invalid ix[%d].y position (%d), range = [%d,%d[\n", i, ix[i].y, lb.y, ub.y );
             err = 1;
         }
 

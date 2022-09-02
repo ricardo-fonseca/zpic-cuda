@@ -1,5 +1,24 @@
 # ZPIC CUDA Development
 
+## 2022.9.2
+
+__MILESTONE:__ The code has successfully completed the LWFA simulation test.
+
+* Implements moving window algorithm
+* New MovingWindow class
+  * Handles moving window data (needs to move, distance moved, etc.)
+* New Density class
+  * Describes all density profiles
+  * Handles particle injection
+* Particles class
+  * Adds `cell_shift` method to shift particle cells by a specified amount
+  * Adds `periodic` member to control `tile_sort()` behaviour (global periodic boundaries were previously enforced)
+* Field and VectorField classes
+  * Adds `x_shift_left` method to shift data left by a specified amount
+  * Adds `periodic` member to control `copy_to_gc()` and `add_from_gc()` method behaviour (global periodic boundaries were previously enforced)
+* Adds math constants to `utils.h`
+* Adds `bnd` class to describe boundary data (x/y, lower/upper)
+
 ## 2022.8.15 - Suplemental
 
 * Optimizes `particles::tile_sort()` routine

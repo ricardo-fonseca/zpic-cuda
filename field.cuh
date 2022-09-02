@@ -18,6 +18,8 @@ class Field {
     uint2 gc[2];         // Tile guard cells
     uint2 ntiles;       // Number of tiles in each direction
 
+    int2 periodic;
+
     /**
      * @brief Class Field (float grid) constructor.
      * 

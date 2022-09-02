@@ -64,13 +64,18 @@ __host__
 void Current::advance() {
 
     // Add up current deposited on guard cells
-    J -> add_from_gc();
-    J -> copy_to_gc();
+    J -> add_from_gc( );
+    J -> copy_to_gc( );
 
     // Apply filtering
     // filter -> apply( *J );
 
     iter++;
+
+    // I'm not sure if this should be before or after `iter++`
+    // Note that it only affects the axis range on output data
+    if ( moving_window.needs_move( iter * dt ) )
+        moving_window.advance();
 }
 
 __host__
@@ -106,7 +111,7 @@ void Current::save( fcomp::cart const jc ) {
     zdf::grid_axis axis[2];
     axis[0] = (zdf::grid_axis) {
     	.name = (char *) "x",
-    	.min = 0.0,
+    	.min = 0.0 + moving_window.motion(),
     	.max = box.x,
     	.label = (char *) "x",
     	.units = (char *) "c/\\omega_n"
@@ -114,7 +119,7 @@ void Current::save( fcomp::cart const jc ) {
 
     axis[1] = (zdf::grid_axis) {
         .name = (char *) "y",
-    	.min = 0.0,
+    	.min = 0.0 + moving_window.motion(),
     	.max = box.y,
     	.label = (char *) "y",
     	.units = (char *) "c/\\omega_n"
