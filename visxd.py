@@ -406,3 +406,95 @@ def histogram( filename, q, bins = 128, range = None, density = True, log = Fals
     plt.ylabel(r'$\sf{' + "n" + r'}$')
 
     plt.show()
+
+def grid2d_fft( filename : str, xlim = None, ylim = None, grid = False, cmap = None, norm = None,
+    vmin = None, vmax = None, plot = "abs" ):
+    """Generates a colormap plot from the FFT of a 2D grid zdf file
+
+    Args:
+        filename (str): Name of ZDF file to open
+        xlim (tuple, optional): Lower and upper limits of x axis. Defaults to the kx limits of the
+            grid data FFT.
+        ylim (tuple, optional): Lower and upper limits of y axis. Defaults to the ky limits of the
+            grid data FFT.
+        grid (bool, optional): Display a grid on top of colormap. Defaults to False.
+        cmap (str, optional): Name of the colormap to use. Defaults to the matplotlib imshow() 
+            colormap
+        norm (matplotlib.colors, optional): Colormap normalization to use. Defaults to None (linear).
+        vmin (float, optional): Max. value to plot. Defaults to the smallest value in the data FFT.
+        vmax (float, optional): Min. value to plot. Defaults to the largest value in the data FFT.
+        plot (str, optional): Type of plot to produce: absolute value of FFT ("abs"), real part of
+            the FFT ("real") or imaginary part of the FFT ("imag"). Defaults to "abs".
+    """
+
+    if ( not os.path.exists(filename) ):
+        # raise FileNotFoundError( filename ) 
+        print("(*error*) file {} not found.".format(filename), file = sys.stderr )
+        return
+
+    (data, info) = zdf.read(filename)
+
+    if ( info.type != "grid" ):
+        print("(*error*) file {} is not a grid file".format(filename))
+        return
+    
+    if ( info.grid.ndims != 2 ):
+        print("(*error*) file {} is not a 2D grid file".format(filename))
+        return
+    
+    if ( not plot in ("abs","real","imag") ):
+        print("(*error*) Invalid plot parameter ({}), must be one of 'abs', 'real' or 'imag'.".
+            format(plot), file = sys.stderr )
+        return
+
+    # Get fft of data
+    data = np.fft.fft2( data )
+    data = np.fft.fftshift( data )
+
+    dx = (info.grid.axis[0].max - info.grid.axis[0].min)/info.grid.nx[0]
+    dy = (info.grid.axis[1].max - info.grid.axis[1].min)/info.grid.nx[1]
+
+    nfx = np.pi / dx
+    nfy = np.pi / dy
+
+    range = [
+        [-nfx, nfx],
+        [-nfy, nfy]
+    ]
+
+    if ( plot == "real"):
+        data = np.real(data)
+        zlabel = "Re\\left[\\mathcal{F}(" + info.grid.label + ")\\right]"
+    elif ( plot == "imag"):
+        data = np.imag(data)
+        zlabel = "Im\\left[\\mathcal{F}(" + info.grid.label + ")\\right]"
+    else:
+        data = np.abs(data)
+        zlabel = "\\left|\\mathcal{F}(" + info.grid.label + ")\\right|"
+
+    plt.imshow( data, interpolation = 'nearest', origin = 'lower',
+        vmin = vmin, vmax = vmax, norm = norm,
+        extent = ( range[0][0], range[0][1], range[1][0], range[1][1] ),
+        aspect = 'auto', cmap=cmap )
+
+    plt.colorbar().set_label(r'$\sf{' + zlabel + r'}$')
+
+    xlabel = "k_{" + info.grid.axis[0].label + "}"
+    ylabel = "k_{" + info.grid.axis[1].label + "}"
+
+    plt.xlabel(r'$\sf{' + xlabel + r'}$')
+    plt.ylabel(r'$\sf{' + ylabel + r'}$')
+
+    plt.title("$\sf {} $\nt = ${:g}$ [$\sf {}$]".format(
+        zlabel.replace(" ","\;"),
+        info.iteration.t,
+        info.iteration.tunits))
+
+    if ( xlim ):
+        plt.xlim(xlim)
+    if ( ylim ):
+        plt.ylim(ylim)
+
+    plt.grid(grid)
+
+    plt.show()

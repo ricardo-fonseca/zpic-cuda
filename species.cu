@@ -1021,7 +1021,7 @@ void Species::deposit_charge( Field &charge ) const {
  * @brief Save particle data to file
  * 
  */
-void Species::save( ) const {
+void Species::save() const {
 
     const char * quants[] = {
         "x","y",

@@ -35,13 +35,13 @@ namespace phasespace {
             name = "y"; label = "y"; units = "c/\\omega_n";
             break;
         case ux :
-            name = "ux"; label = "u_x"; units = "m_e c";
+            name = "ux"; label = "u_x"; units = "c";
             break;
         case uy :
-            name = "uy"; label = "u_y"; units = "m_e c";
+            name = "uy"; label = "u_y"; units = "c";
             break;
         case uz :
-            name = "uz"; label = "u_y"; units = "m_e c";
+            name = "uz"; label = "u_y"; units = "c";
             break;
         }
     }

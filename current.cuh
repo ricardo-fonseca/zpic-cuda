@@ -4,6 +4,7 @@
 #include "vector_field.cuh"
 #include "util.cuh"
 #include "moving_window.cuh"
+#include "filter.cuh"
 
 class Current {
 
@@ -23,13 +24,16 @@ class Current {
     VectorField * J;
 
     // Filtering parameters
-    //Filter filter;
+    Filter::Digital *filter;
 
     // Iteration number
     int iter;
 
     __host__ Current( uint2 const ntiles, uint2 const nx, float2 const box, float const dt );
-    __host__ ~Current();
+    __host__ ~Current() {
+        delete (J);
+        delete (filter);
+    }
 
     __host__
     /**
@@ -48,6 +52,12 @@ class Current {
             std::cerr << "(*error*) set_moving_window() called with iter != 0\n";
             return -1; 
         }
+    }
+
+    __host__
+    void set_filter( Filter::Digital const & new_filter ) {
+        delete filter;
+        filter = new_filter.clone();
     }
 
     __host__ void advance();

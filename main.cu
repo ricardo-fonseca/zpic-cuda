@@ -27,17 +27,16 @@ void test_emf() {
 
     emf.set_moving_window();
 
-/*
-    Laser laser;
+
+    Laser::PlaneWave laser;
     laser.start = 16;
     laser.fwhm = 4;
     laser.a0 = 1.0f;
     laser.polarization = 0.f;
     laser.omega0 = 5.0;
-*/
 
-
-    Gaussian laser;
+/*
+    Laser::Gaussian laser;
     laser.start = 16;
     laser.fwhm = 4;
     laser.a0 = 1.0f;
@@ -47,6 +46,7 @@ void test_emf() {
     laser.W0 = 4;
     laser.focus = 12.8;
     laser.axis = 12.8;
+*/
 
     Timer timer;
 
@@ -213,6 +213,33 @@ void test_move_window() {
     printf("Elapsed time: %.3f ms\n", timer.elapsed());
 }
 
+void test_filter() {
+
+    // Create simulation box
+    uint2 ntiles = {32, 16};
+    uint2 nx = {32,16};
+    float2 box = {20.48, 25.6};
+    float dt = 0.014;
+
+    EMF emf( ntiles, nx, box, dt );
+
+    Laser::Gaussian laser;
+    laser.start = 17.0;
+    laser.fwhm = 2.0;
+    laser.a0 = 3.0;
+    laser.omega0 = 10.0;
+    laser.W0 = 4.0;
+    laser.focus = 20.28;
+    laser.axis = 12.8;
+    laser.polarization = M_PI_2;
+
+    emf.add_laser( laser );
+
+    Filter::Compensated filter(1);
+    filter.apply(*emf.E);
+
+    emf.save( emf::e, fcomp::z );
+}
 
 void test_weibel() {
 
@@ -270,8 +297,8 @@ void test_weibel() {
 void test_lwfa() {
 
     // Create simulation box
-    uint2 ntiles = {16, 16};
-    uint2 nx = {64,16};
+    uint2 ntiles = {32, 16};
+    uint2 nx = {32,16};
     float2 box = {20.48, 25.6};
 
     float dt = 0.014;
@@ -279,23 +306,24 @@ void test_lwfa() {
     Simulation sim( ntiles, nx, box, dt );
 
     // Add particles species
-    uint2 ppc  = {8,8};
+    uint2 ppc  = {4,4};
     float3 ufl = {0., 0., 0.};
     float3 uth = {0., 0., 0.};
 
     sim.add_species( "electrons", -1.0f, ppc, Density::Step(1.0f,20.48), uth, ufl );
 
-    Gaussian laser;
+    Laser::Gaussian laser;
     laser.start = 17.0;
     laser.fwhm = 2.0;
-    laser.a0 = 1.0;
+    laser.a0 = 3.0;
     laser.omega0 = 10.0;
     laser.W0 = 4.0;
     laser.focus = 20.28;
     laser.axis = 12.8;
     laser.polarization = M_PI_2;
 
-    sim.add_laser( laser );
+    sim.emf -> add_laser( laser );
+    // sim.current -> set_filter( Filter::Compensated() );
 
     sim.set_moving_window();
 
@@ -337,6 +365,8 @@ int main() {
     // test_sort_deposit();
 
     // test_move_window();
+
+    // test_filter();
 
     // test_weibel();
 

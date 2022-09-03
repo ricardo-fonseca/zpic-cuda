@@ -38,20 +38,13 @@ Current::Current( uint2 const ntiles, uint2 const nx, float2 const box,
     // This is only relevant for diagnostics, current should always zeroed before deposition
     J -> zero();
 
+    // Disable filtering by default
+    filter = new Filter::None();
+
     // Reset iteration number
     iter = 0;
 
     std::cout << "(*info*) Current object initialized." << std::endl;
-}
-
-__host__
-/**
- * @brief Destroy the Current:: Current object
- * 
- */
-Current::~Current()
-{   
-    delete (J);
 }
 
 __host__
@@ -68,8 +61,9 @@ void Current::advance() {
     J -> copy_to_gc( );
 
     // Apply filtering
-    // filter -> apply( *J );
+    filter -> apply( *J );
 
+    // Advance iteration count
     iter++;
 
     // I'm not sure if this should be before or after `iter++`

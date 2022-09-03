@@ -113,10 +113,6 @@ class Simulation {
         return ( id < species.size() ) ? species[id] : nullptr;
     }
 
-    void add_laser( Laser & laser ) {
-        emf -> add_laser( laser );
-    }
-
     void advance() {
 
         // Zero global current

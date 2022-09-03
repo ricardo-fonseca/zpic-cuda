@@ -140,8 +140,10 @@ class VectorField {
     void add_from_gc( );
     
     __host__
-    
     void x_shift_left( unsigned int const shift );
+
+    __host__
+    void kernel3_x( float const a, float const b, float const c );
 
     __host__
     /**

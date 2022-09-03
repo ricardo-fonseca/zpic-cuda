@@ -5,22 +5,7 @@
 #include <cooperative_groups.h>
 namespace cg=cooperative_groups;
 
-__host__
-/**
- * @brief Construct a new Laser:: Laser object
- * 
- */
-Laser::Laser() {
-    start = 0;
-    fwhm = 0;
-    rise = flat = fall = 0;
-    a0 = 0;
-    omega0 = 0;
-
-    polarization = 0;
-    cos_pol = sin_pol = 0;
-}
-
+#include "filter.cuh"
 
 __host__
 /**
@@ -28,37 +13,38 @@ __host__
  * 
  * @return      0 on success, -1 on error
  */
-int Laser::validate() {
+int Laser::Pulse::validate() {
+
+    if ( a0 <= 0 ) {
+        std::cerr << "(*error*) Invalid laser a0, must be > 0" << std::endl;
+        return -1;
+    }    
 
     if ( omega0 <= 0 ) {
         std::cerr << "(*error*) Invalid laser OMEGA0, must be > 0" << std::endl;
         return -1;
     }    
 
-    if ( fwhm != 0 ) {
-        if ( fwhm <= 0 ) {
-            std::cerr << "(*error*) Invalid laser FWHM, must be > 0" << std::endl;
-            return (-1);
-        }
+    if ( fwhm > 0 ) {
         // The fwhm parameter overrides the rise/flat/fall parameters
         rise = fwhm;
         fall = fwhm;
         flat = 0.;
-    }
+    } else {
+        if ( rise <= 0 ) {
+            std::cerr << "(*error*) Invalid laser RISE, must be > 0" << std::endl;
+            return (-1);
+        }
 
-    if ( rise <= 0 ) {
-        std::cerr << "(*error*) Invalid laser RISE, must be > 0" << std::endl;
-        return (-1);
-    }
+        if ( flat < 0 ) {
+            std::cerr << "(*error*) Invalid laser FLAT, must be >= 0" << std::endl;
+            return (-1);
+        }
 
-    if ( flat < 0 ) {
-        std::cerr << "(*error*) Invalid laser FLAT, must be >= 0" << std::endl;
-        return (-1);
-    }
-
-    if ( fall <= 0 ) {
-        std::cerr << "(*error*) Invalid laser FALL, must be > 0" << std::endl;
-        return (-1);
+        if ( fall <= 0 ) {
+            std::cerr << "(*error*) Invalid laser FALL, must be > 0" << std::endl;
+            return (-1);
+        }
     }
 
     return 0;
@@ -73,7 +59,7 @@ int Laser::validate() {
  * @return          laser envelope
  */
 __device__
-float lon_env( Laser& laser, float z ) {
+float lon_env( Laser::Pulse & laser, float z ) {
 
     if ( z > laser.start ) {
         // Ahead of laser
@@ -111,7 +97,7 @@ float lon_env( Laser& laser, float z ) {
  * @param dx        Cell size
  */
 __global__
-void _plane_wave_kernel( Laser laser, 
+void _plane_wave_kernel( Laser::PlaneWave laser, 
     float3 * __restrict__ E, float3 * __restrict__ B,
     uint2 int_nx, uint2 ext_nx, float2 const dx )
 {
@@ -159,27 +145,23 @@ void _plane_wave_kernel( Laser laser,
  * @return      Returns 0 on success, -1 on error (invalid laser parameters)
  */
 __host__
-int Laser::launch( VectorField& E, VectorField& B, float2 box ) {
+int Laser::PlaneWave::launch( VectorField& E, VectorField& B, float2 box ) {
 
     std::cout << "(*info*) Launching plane wave, omega0 = " << omega0 << std::endl;
 
     if ( validate() < 0 ) return -1;
 
-    if ( cos_pol == sin_pol ) {
+    if (( cos_pol == 0 ) && ( sin_pol == 0 )) {
         cos_pol = cos( polarization );
         sin_pol = sin( polarization );
     }
 
     uint2 g_nx = E.g_nx();
 
-    std::cout << "(*info*) g_nx = " << g_nx.x << " : " << g_nx.y << "\n";
-
     float2 dx = make_float2(
         box.x / g_nx.x,
         box.y / g_nx.y
     );
-
-    std::cout << "(*info*) dx = " << dx.x << " : " << dx.y << "\n";
 
     uint2 ext_nx = E.ext_nx();
     unsigned int offset = E.offset();
@@ -196,6 +178,10 @@ int Laser::launch( VectorField& E, VectorField& B, float2 box ) {
     E.copy_to_gc();
     B.copy_to_gc();
 
+    Filter::Compensated filter(1);
+    filter.apply(E);
+    filter.apply(B);
+
     return 0;
 }
 
@@ -205,9 +191,9 @@ int Laser::launch( VectorField& E, VectorField& B, float2 box ) {
  * @return      0 on success, -1 on error
  */
 __host__
-int Gaussian::validate() {
+int Laser::Gaussian::validate() {
     
-    if ( Laser::validate() < 0 ) {
+    if ( Laser::Pulse::validate() < 0 ) {
         return -1;
     }
 
@@ -256,7 +242,7 @@ float gauss_phase( const float omega0, const float W0, const float z, const floa
  * @param dx        Cell size
  */
 __global__
-void _gaussian_kernel( Gaussian beam, 
+void _gaussian_kernel( Laser::Gaussian beam, 
     float3 * const __restrict__ E, float3 * const __restrict__ B,
     uint2 int_nx, uint2 ext_nx, float2 const dx )
 {
@@ -299,7 +285,7 @@ void _gaussian_kernel( Gaussian beam,
 /**
  * @brief CUDA kernel for div_corr_x, step A
  * 
- * Get per-tile E and B divergence at left edge starting from 0
+ * Get per-tile E and B divergence at tile left edge starting from 0.0
  * Kernel must be launched with a grid [ntiles.x,ntiles.y] and block [nthreads]
  * It also required dynamic shared memory buffer for 2 tiles
  * 
@@ -545,13 +531,13 @@ void div_corr_x(VectorField& E, VectorField& B, float2 const dx )
  * @return      Returns 0 on success, -1 on error (invalid laser parameters)
  */
 __host__
-int Gaussian::launch(VectorField& E, VectorField& B, float2 const box ) {
+int Laser::Gaussian::launch(VectorField& E, VectorField& B, float2 const box ) {
 
     std::cout << "(*info*) Launching gaussian beam, omega0 = " << omega0 << std::endl;
 
     if ( validate() < 0 ) return -1;
 
-    if ( cos_pol == sin_pol ) {
+    if (( cos_pol == 0 ) && ( sin_pol == 0 )) {
         cos_pol = cos( polarization );
         sin_pol = sin( polarization );
     }
@@ -575,6 +561,10 @@ int Gaussian::launch(VectorField& E, VectorField& B, float2 const box ) {
 
     E.copy_to_gc();
     B.copy_to_gc();
+
+    Filter::Compensated filter(1);
+    filter.apply(E);
+    filter.apply(B);
 
     div_corr_x( E, B, dx );
 

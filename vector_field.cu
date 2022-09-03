@@ -623,6 +623,80 @@ void VectorField::x_shift_left( unsigned int const shift ) {
     }
 }
 
+__global__
+/**
+ * @brief CUDA kernel for VectorField::kernel3_x
+ * 
+ * @param a         Convolution kernel a value
+ * @param b         Convolution kernel b value
+ * @param c         Convolution kernel c value
+ * @param buffer    Data buffer
+ * @param int_nx    Internal tile size
+ * @param ext_nx    External tile size
+ * @param offset    Offset to position (0,0) on tile
+ */
+void _kernel3_x( float const a, float const b, float const c, 
+    float3 * const __restrict__ buffer, 
+    uint2 const int_nx, uint2 const ext_nx, unsigned int const offset )
+{
+
+    auto block = cg::this_thread_block();
+    extern __shared__ float3 local[];
+
+    const int tile_off = ((blockIdx.y * gridDim.x) + blockIdx.x) * ext_nx.x * ext_nx.y;
+
+    // Copy data into shared memory
+    for( int i = block.thread_rank(); i < ext_nx.x * ext_nx.y; i += block.num_threads() ) 
+        local[i] = buffer[ tile_off + i ];
+
+    block.sync();
+
+    // Do kernel convolution and store back to device memory
+    const int stride = ext_nx.x;
+    float3 * __restrict__ tmp = local + offset;
+
+    for( int idx = block.thread_rank(); idx < int_nx.x * int_nx.y; idx += block.num_threads() ) {
+        const int i = idx % int_nx.x;
+        const int j = idx / int_nx.x;
+
+        float3 val;
+
+        val.x = a * tmp[ j*stride + (i-1) ].x + b * tmp[ j*stride + i ].x + c * tmp[ j*stride + (i+1) ].x;
+        val.y = a * tmp[ j*stride + (i-1) ].y + b * tmp[ j*stride + i ].y + c * tmp[ j*stride + (i+1) ].y;
+        val.z = a * tmp[ j*stride + (i-1) ].z + b * tmp[ j*stride + i ].z + c * tmp[ j*stride + (i+1) ].z;
+
+        buffer[ tile_off + offset + j*stride + i ] = val;
+    }
+}
+
+/**
+ * @brief Perform a convolution with a 3 point kernel [a,b,c] along x
+ * 
+ * @param a     Kernel a value
+ * @param b     Kernel b value
+ * @param c     Kernel c value
+ */
+void VectorField::kernel3_x( float const a, float const b, float const c ) {
+
+    if (( gc[0].x > 0) && (gc[1].x > 0)) {
+
+        uint2 ext = ext_nx();
+
+        dim3 block( 64 );
+        dim3 grid( ntiles.x, ntiles.y );
+
+        size_t shm_size = ext.x * ext.y * sizeof(float3);
+
+        _kernel3_x<<< grid, block, shm_size >>> ( a, b, c, d_buffer, nx, ext, offset() );
+        
+        _copy_gcx_kernel <<<grid, block>>> ( d_buffer, 0, ext, nx, gc[0].x, gc[1].x );
+
+    } else {
+        std::cerr << "(*error*) VectorField::kernel_x3() requires at least 1 guard cell at both the lower and upper x boundaries.\n";
+        exit(1);
+    }
+}
+
 __host__
 /**
  * @brief  Save field values to disk

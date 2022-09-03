@@ -1,5 +1,15 @@
 # ZPIC CUDA Development
 
+## 2022.9.3
+
+* Adds electric current filtering (along x only)
+  * Filtering parameters defined by `Filter::` classes: `Filter::None`, `Filter::Binomial` and `Filter::Compensated`
+  * Controled by `Current::set_filter()` method. Can be changed over the course of the simulation
+* Moves laser pulses into `Laser::` namespace, e.g. `Laser::Gaussian`
+* Lasers pulses are now filtered with `Filter::Compensated(1)` before injection
+* Fixes inconsistency in phasespace units (ux, uy, and uz units are now "c")
+* Adds `visxd.grid2d_fft()` routine to plot the FFT of 2D grid data
+
 ## 2022.9.2
 
 __MILESTONE:__ The code has successfully completed the LWFA simulation test.

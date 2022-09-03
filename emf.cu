@@ -372,9 +372,7 @@ void EMF::move_window() {
  * 
  * @param laser     Laser pulse object
  */
-void EMF::add_laser( Laser& laser ){
-
-    std::cout << "(*info*) Adding laser..." << std::endl;
+void EMF::add_laser( Laser::Pulse & laser ){
 
     VectorField tmp_E( E -> ntiles, E-> nx, E -> gc );
     VectorField tmp_B( E -> ntiles, B-> nx, B -> gc );
