@@ -22,6 +22,11 @@
 
 #include "density.cuh"
 #include "moving_window.cuh"
+#include "udist.cuh"
+
+namespace pusher {
+    enum type { boris, euler };
+}
 
 namespace phasespace {
     enum quant { x, y, ux, uy, uz };
@@ -60,9 +65,6 @@ private:
     float n0;
 
     Density::Profile * density;
-
-    // Total kinetic energy per tile
-    double * d_energy_tile;
 
     float q;
 
@@ -107,6 +109,8 @@ public:
     // Particle data buffer
     Particles *particles;
 
+    pusher::type push_type;
+
     __host__
     Species( std::string const name, float const m_q, 
         uint2 const ppc, Density::Profile const & density,
@@ -140,7 +144,7 @@ public:
     void inject( bnd<unsigned int> range );
 
     __host__
-    void set_u( float3 const uth, float3 const ufl );
+    void set_udist( UDistribution::Type const & udist ) { udist.set(*particles);};
 
     __host__
     void advance( EMF const &emf, Current &current );

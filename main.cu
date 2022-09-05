@@ -104,16 +104,7 @@ void test_sort_deposit() {
     Current current( ntiles, nx, box, dt );
 
     uint2 ppc = {8,8};
-
-    float3 uth = { 0 };
-//    float3 uth = {0.1, 0.2, 0.3 };
-
-//    float3 ufl = {0.,    0.,    0.};
-//   float3 ufl = {   0.,    0., 1000.};
-//    float3 ufl = {1000.,    0.,  1000.};
-//    float3 ufl = {   0., 1000.,    1000.};
-    float3 ufl = {1000., 1000., 1000.};
-
+    auto udist = UDistribution::Cold( make_float3(1000,1000,1000));
 
     bnd<unsigned int> range;
     range.x = { .lower = 128, .upper = 255 };
@@ -127,7 +118,7 @@ void test_sort_deposit() {
 
     electrons.inject( range );
     electrons.particles->validate( "After injection");
-    electrons.set_u( uth, ufl );
+    electrons.set_udist( udist );
 
     electrons.save_charge();
     current.save( fcomp::x );
@@ -183,13 +174,11 @@ void test_move_window() {
 
     // Add particles species
     uint2 ppc  = {8,8};
-    float3 ufl = {0., 0., 0.};
-    float3 uth = {0., 0., 0.};
     
     auto density = Density::Sphere( 1.0, make_float2(25.6,12.8), 6.4 );
     // auto density = Density::Uniform( 1.0 );
 
-    sim.add_species( "electrons", -1.0f, ppc, density, uth, ufl );
+    sim.add_species( "electrons", -1.0f, ppc, density, UDistribution::None() );
 
     sim.get_species(0) -> save_charge();
 
@@ -257,9 +246,24 @@ void test_weibel() {
     float3 ufl = {0., 0., 0.6};
     float3 uth = {0.1, 0.1, 0.1};
 
-    sim.add_species( "electrons", -1.0f, ppc, Density::Uniform(1.0f), uth, ufl );
-    ufl.z = -ufl.z;
-    sim.add_species( "positrons", +1.0f, ppc, Density::Uniform(1.0f), uth, ufl );
+    auto udist = UDistribution::Thermal( uth, ufl );
+    //auto udist = UDistribution::ThermalCorr( uth, ufl, 16 );
+
+    sim.add_species( "electrons", -1.0f, ppc, Density::Uniform(1.0f), udist );
+    udist.ufl.z = -udist.ufl.z;
+    sim.add_species( "positrons", +1.0f, ppc, Density::Uniform(1.0f), udist );
+
+
+    sim.get_species(0)-> save_phasespace ( 
+        phasespace::ux, make_float2( -1, 1 ), 128,
+        phasespace::uz, make_float2( -1, 1 ), 128
+        );
+
+    sim.get_species(1)-> save_phasespace ( 
+        phasespace::ux, make_float2( -1, 1 ), 128,
+        phasespace::uz, make_float2( -1, 1 ), 128
+        );
+
 
     // Run simulation
     float const imax = 500;
@@ -307,10 +311,8 @@ void test_lwfa() {
 
     // Add particles species
     uint2 ppc  = {4,4};
-    float3 ufl = {0., 0., 0.};
-    float3 uth = {0., 0., 0.};
 
-    sim.add_species( "electrons", -1.0f, ppc, Density::Step(1.0f,20.48), uth, ufl );
+    sim.add_species( "electrons", -1.0f, ppc, Density::Step(1.0f,20.48), UDistribution::None() );
 
     Laser::Gaussian laser;
     laser.start = 17.0;
@@ -368,9 +370,9 @@ int main() {
 
     // test_filter();
 
-    // test_weibel();
+    test_weibel();
 
-    test_lwfa();
+    // test_lwfa();
 
     return 0;
 }

@@ -24,7 +24,6 @@ __host__
 Current::Current( uint2 const ntiles, uint2 const nx, float2 const box,
     float const dt ) : box{box}, dt{dt}
 {
-
     dx.x = box.x / ( nx.x * ntiles.x );
     dx.y = box.y / ( nx.y * ntiles.y );
 

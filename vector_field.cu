@@ -31,7 +31,7 @@ VectorField::VectorField( uint2 const ntiles, uint2 const nx, uint2 const gc_[2]
  * @param nx        Tile grid size
  */
 VectorField::VectorField( uint2 const ntiles, uint2 const nx ) :
-    ntiles( ntiles ), nx( nx )
+    ntiles( ntiles ), nx( nx ), periodic( make_int2(1,1) )
 {
     gc[0] = {0};
     gc[1] = {0};
@@ -304,7 +304,7 @@ void _copy_gcx_kernel(
 
     if ( periodic ) {
         if ( x_lcoord < 0 ) x_lcoord += gridDim.x;
-        if ( x_ucoord > gridDim.x-1 ) x_ucoord -= gridDim.x;
+        if ( x_ucoord >= gridDim.x ) x_ucoord -= gridDim.x;
     }
 
     // Copy data to lower guard cells
@@ -360,7 +360,7 @@ void _copy_gcy_kernel(
 
     if ( periodic ) {
         if ( y_lcoord < 0 ) y_lcoord += gridDim.y;
-        if ( y_ucoord > gridDim.x-1 ) y_ucoord -= gridDim.y;
+        if ( y_ucoord >= gridDim.y ) y_ucoord -= gridDim.y;
     }
 
     // Copy data to lower guard cells
@@ -440,7 +440,7 @@ void _add_gcx_kernel(
 
     if ( periodic ) {
         if ( x_lcoord < 0 ) x_lcoord += gridDim.x;
-        if ( x_ucoord > gridDim.x-1 ) x_ucoord -= gridDim.x;
+        if ( x_ucoord >= gridDim.x ) x_ucoord -= gridDim.x;
     }
 
     if ( x_lcoord >= 0 ) {
@@ -504,7 +504,7 @@ void _add_gcy_kernel(
 
     if ( periodic ) {
         if ( y_lcoord < 0 ) y_lcoord += gridDim.y;
-        if ( y_ucoord > gridDim.x-1 ) y_ucoord -= gridDim.y;
+        if ( y_ucoord >= gridDim.y ) y_ucoord -= gridDim.y;
     }
 
     if ( y_lcoord >= 0 ) {

@@ -85,15 +85,18 @@ class Simulation {
      * @param ufl       Initial fluid velocity
      */
     void add_species( std::string const name, float const m_q, uint2 const ppc,
-        Density::Profile const & dens, float3 const uth, float3 const ufl )
+        Density::Profile const & dens, UDistribution::Type const & udist )
     {
         Species * s = new Species( 
             name, m_q, ppc, dens, 
             box, ntiles, nx, dt );
         species.push_back( s );
 
+        // Inject particles
         s -> inject( );
-        s -> set_u( uth, ufl );
+
+        // Set momentum distribution
+        s -> set_udist( udist );
     }
 
     /**

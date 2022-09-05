@@ -696,13 +696,28 @@ void _bnd_in( int const lim,
 
     // Copy from upper neighbour
     int x_ucoord = blockIdx.x;
-    int y_ucoord = blockIdx.y;
-    
-    if ( dir == coord::x )
-        x_ucoord += ( periodic && blockIdx.x == gridDim.x - 1 ) ? - (int) gridDim.x : 1;
+    int x_lcoord = blockIdx.x;
 
-    if ( dir == coord::y )
-        y_ucoord += ( periodic && blockIdx.y == gridDim.y - 1 ) ? - (int) gridDim.y : 1;
+    if ( dir == coord::x ) {
+        x_lcoord -= 1;
+        x_ucoord += 1;
+        if ( periodic ) {
+            if ( x_lcoord < 0 ) x_lcoord += gridDim.x;
+            if ( x_ucoord >= gridDim.x ) x_ucoord -= gridDim.x;
+        }
+    }
+
+    int y_ucoord = blockIdx.y;
+    int y_lcoord = blockIdx.y;
+
+    if ( dir == coord::y ) {
+        y_lcoord -= 1;
+        y_ucoord += 1;
+        if ( periodic ) {
+            if ( y_lcoord < 0 ) y_lcoord += gridDim.y;
+            if ( y_ucoord >= gridDim.y ) y_ucoord -= gridDim.y;
+        }
+    }
 
     if (( x_ucoord < gridDim.x ) && 
         ( y_ucoord < gridDim.y )) {
@@ -729,15 +744,6 @@ void _bnd_in( int const lim,
     }
 
     // Copy from lower neighbour
-    int x_lcoord = blockIdx.x;
-    int y_lcoord = blockIdx.y;
-
-    if ( dir == coord::x )
-        x_lcoord += ( periodic && (blockIdx.x == 0) ) ? (int) gridDim.x : -1;
-
-    if ( dir == coord::y )
-        y_lcoord += ( periodic && (blockIdx.y == 0) ) ? (int) gridDim.y : -1;
-
     if (( x_lcoord >= 0 ) && 
         ( y_lcoord >= 0 )) {
 

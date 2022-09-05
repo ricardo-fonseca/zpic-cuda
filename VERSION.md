@@ -1,5 +1,15 @@
 # ZPIC CUDA Development
 
+## 2022.9.5
+
+* Particle pusher can now be set using the `Species.push_type` member variable
+* Fixes issue with particle tile sort with periodic boundaries
+* Implements `UDistribution::*` classes to handle temperature distributions:
+  * Implements `None` (0), `Cold` (ufl only), and `Thermal` (uth, ufl)
+  * Also implements `ThermalCorr` that includes a correction for local ufl fluctuations due to low number of particles per cell
+* Laser pulse filtering can now be controlled by the `laser.filter` parameter.
+  * This defaults to 1, which corresponds to a 1 level compensated binomial filter. Setting it to 0 disables filtering.
+
 ## 2022.9.3
 
 * Adds electric current filtering (along x only)

@@ -8,6 +8,8 @@ namespace Laser {
 class Pulse {
     public:
 
+    unsigned int filter;
+
     float start;    // Front edge of the laser pulse, in simulation units
     float fwhm;     // FWHM of the laser pulse duration, in simulation units
     float rise, flat, fall; // Rise, flat and fall time of the laser pulse, in simulation units 
@@ -22,7 +24,7 @@ class Pulse {
 
     __host__ Pulse() : start(0), fwhm(0), rise(0), flat(0), fall(0),
         a0(0), omega0(0),
-        polarization(0), cos_pol(0), sin_pol(0) {};
+        polarization(0), cos_pol(0), sin_pol(0), filter(1) {};
 
     __host__ virtual int validate();
     __host__ virtual int launch( VectorField& E, VectorField& B, float2 box ) = 0;

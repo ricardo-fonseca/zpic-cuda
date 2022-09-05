@@ -13,7 +13,7 @@
 #include <iostream>
 
 #include "timer.cuh"
-#include "random.cuh"
+
 
 #include "util.cuh"
 
@@ -74,10 +74,11 @@ Species::Species( std::string const name, float const m_q,
     particles = new Particles( ntiles, nx, np_max );
     tmp = new Particles( ntiles, nx, np_max );
 
-    malloc_dev( d_energy_tile, ntiles.x * ntiles.y );
-
     // Reset iteration numbers
     iter = 0;
+
+    // Default pusher type
+    push_type = pusher::euler;
 }
 
 /**
@@ -85,68 +86,10 @@ Species::Species( std::string const name, float const m_q,
  * 
  */
 Species::~Species() {
-
-    free_dev( d_energy_tile );
-
     delete( tmp );
     delete( particles );
-
     delete( density );
-
 }
-
-__global__
-/**
- * @brief Adds fluid momentum to particles
- * 
- * @param d_tile    Tile information
- * @param d_u       Particle buffer (momenta)
- * @param ufl       Fluid momentum to add
- */
-void _set_u_kernel( 
-    t_part_tile const * const __restrict__ d_tiles,
-    float3 * const __restrict__ d_u, 
-    const uint2 seed, const float3 uth, const float3 ufl ) {
-
-    // Tile ID
-    const int tid = blockIdx.y * gridDim.x + blockIdx.x;
-
-    // Initialize random state variables
-    uint2 state;
-    double norm;
-    rand_init( seed, state, norm );
-
-    // Set particle momenta
-    const int offset = d_tiles[tid].pos;
-    const int np     = d_tiles[tid].n;
-    float3 __restrict__ * const u  = &d_u[ offset ];
-
-    for( int i = threadIdx.x; i < np; i+= blockDim.x ) {
-        u[i] = make_float3(
-            ufl.x + uth.x * rand_norm( state, norm ),
-            ufl.y + uth.y * rand_norm( state, norm ),
-            ufl.z + uth.z * rand_norm( state, norm )
-        );
-    }
-}
-
-/**
- * @brief Sets momentum of all particles in object using uth / ufl
- * 
- */
-void Species::set_u( float3 const uth, float3 const ufl ) {
-
-    // Set thermal momentum
-    dim3 grid( particles->ntiles.x, particles->ntiles.y );
-    dim3 block( 64 );
-    
-    uint2 seed = {12345, 67890};
-    _set_u_kernel <<< grid, block >>> ( 
-        particles -> tiles, particles -> u, seed, uth, ufl
-    );
-}
-
-
 
 /**
  * @brief Inject particles in the complete simulation box
@@ -609,10 +552,6 @@ void Species::move( )
 
 }
 
-namespace pusher {
-    enum type { boris, euler };
-}
-
 __device__
 /**
  * @brief Advance memntum using a relativistic Boris pusher.
@@ -928,11 +867,23 @@ void Species::push( VectorField * const E, VectorField * const B )
     size_t shm_size = 2 * ( ext_nx.x * ext_nx.y * sizeof(float3) );
 
     const float alpha = 0.5 * dt / m_q;
-    _push_kernel <pusher::euler> <<< grid, block, shm_size >>> (
-        particles -> tiles, 
-        particles -> ix, particles -> x, particles -> u,
-        E -> d_buffer, B -> d_buffer, E -> offset(), ext_nx, alpha
-    );
+
+    switch( push_type ) {
+    case( pusher :: euler ):
+        _push_kernel <pusher::euler> <<< grid, block, shm_size >>> (
+            particles -> tiles, 
+            particles -> ix, particles -> x, particles -> u,
+            E -> d_buffer, B -> d_buffer, E -> offset(), ext_nx, alpha
+        );
+        break;
+    case( pusher :: boris ):
+        _push_kernel <pusher::boris> <<< grid, block, shm_size >>> (
+            particles -> tiles, 
+            particles -> ix, particles -> x, particles -> u,
+            E -> d_buffer, B -> d_buffer, E -> offset(), ext_nx, alpha
+        );
+        break;
+    }
 
 }
 

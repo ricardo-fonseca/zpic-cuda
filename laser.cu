@@ -147,8 +147,6 @@ void _plane_wave_kernel( Laser::PlaneWave laser,
 __host__
 int Laser::PlaneWave::launch( VectorField& E, VectorField& B, float2 box ) {
 
-    std::cout << "(*info*) Launching plane wave, omega0 = " << omega0 << std::endl;
-
     if ( validate() < 0 ) return -1;
 
     if (( cos_pol == 0 ) && ( sin_pol == 0 )) {
@@ -169,7 +167,6 @@ int Laser::PlaneWave::launch( VectorField& E, VectorField& B, float2 box ) {
     dim3 block( 64 );
     dim3 grid( E.ntiles.x, E.ntiles.y );
 
-
     _plane_wave_kernel <<< grid, block >>> ( *this,
         E.d_buffer + offset, B.d_buffer + offset,
         E.nx, ext_nx, dx
@@ -178,9 +175,11 @@ int Laser::PlaneWave::launch( VectorField& E, VectorField& B, float2 box ) {
     E.copy_to_gc();
     B.copy_to_gc();
 
-    Filter::Compensated filter(1);
-    filter.apply(E);
-    filter.apply(B);
+    if ( filter > 0 ) {
+        Filter::Compensated fcomp(filter);
+        fcomp.apply(E);
+        fcomp.apply(B);
+    }
 
     return 0;
 }
@@ -533,8 +532,6 @@ void div_corr_x(VectorField& E, VectorField& B, float2 const dx )
 __host__
 int Laser::Gaussian::launch(VectorField& E, VectorField& B, float2 const box ) {
 
-    std::cout << "(*info*) Launching gaussian beam, omega0 = " << omega0 << std::endl;
-
     if ( validate() < 0 ) return -1;
 
     if (( cos_pol == 0 ) && ( sin_pol == 0 )) {
@@ -562,9 +559,11 @@ int Laser::Gaussian::launch(VectorField& E, VectorField& B, float2 const box ) {
     E.copy_to_gc();
     B.copy_to_gc();
 
-    Filter::Compensated filter(1);
-    filter.apply(E);
-    filter.apply(B);
+    if ( filter > 0 ) {
+        Filter::Compensated fcomp(filter);
+        fcomp.apply(E);
+        fcomp.apply(B);
+    }
 
     div_corr_x( E, B, dx );
 

@@ -7,8 +7,9 @@ LDFLAGS =
 CFLAGS += --gpu-architecture=compute_60
  
 SOURCE = field.cu vector_field.cu particles.cu \
-         emf.cu laser.cu current.cu density.cu species.cu \
-         main.cu
+        emf.cu laser.cu current.cu \
+        udist.cu density.cu species.cu \
+        main.cu
 
 # Add ZDF library
 SOURCE += zdf.c
