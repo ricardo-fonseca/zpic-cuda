@@ -31,6 +31,9 @@ EMF::EMF( uint2 const ntiles, uint2 const nx, float2 const box,
     E -> zero();
     B -> zero();
 
+    // Reserve device memory for energy diagnostic
+    malloc_dev( d_energy, 6 );
+
     // Reset iteration number
     iter = 0;
 
@@ -45,6 +48,8 @@ __host__
 EMF::~EMF(){
     delete (E);
     delete (B);
+
+    free_dev( d_energy );
 }
 
 /**
@@ -460,13 +465,89 @@ void EMF::save( const emf::field field, fcomp::cart const fc ) {
     f -> save( fc, info, iteration, "EMF" );
 }
 
+__global__
+void _get_energy_kernel( 
+    float3 * const __restrict__ d_E,
+    float3 * const __restrict__ d_B,
+    uint2 const int_nx, uint2 const ext_nx, unsigned int const offset, 
+    double * const __restrict__ d_energy ) {
+
+    auto block = cg::this_thread_block();
+    auto warp  = cg::tiled_partition<32>(block);
+
+    const int ext_vol = ext_nx.x * ext_nx.y;
+    const int tile_off = ((blockIdx.y * gridDim.x) + blockIdx.x) * ext_vol + offset;
+
+    // Copy E and B into shared memory and sync
+    double3 ene_E = make_double3(0,0,0);
+    double3 ene_B = make_double3(0,0,0);
+
+    for( int idx = block.thread_rank(); idx < int_nx.y * int_nx.x; idx += block.num_threads() ) {
+        int const i = idx % int_nx.x;
+        int const j = idx / int_nx.x;
+
+        float3 const efld = d_E[ tile_off + j * ext_nx.x + i ];
+        float3 const bfld = d_B[ tile_off + j * ext_nx.x + i ];
+
+        ene_E.x += efld.x * efld.x;
+        ene_E.y += efld.y * efld.y;
+        ene_E.z += efld.z * efld.z;
+
+        ene_B.x += bfld.x * bfld.x;
+        ene_B.y += bfld.y * bfld.y;
+        ene_B.z += bfld.z * bfld.z;
+    }
+
+    // Add up energy from all warps
+    ene_E.x = cg::reduce( warp, ene_E.x, cg::plus<double>());
+    ene_E.y = cg::reduce( warp, ene_E.y, cg::plus<double>());
+    ene_E.z = cg::reduce( warp, ene_E.z, cg::plus<double>());
+
+    ene_B.x = cg::reduce( warp, ene_B.x, cg::plus<double>());
+    ene_B.y = cg::reduce( warp, ene_B.y, cg::plus<double>());
+    ene_B.z = cg::reduce( warp, ene_B.z, cg::plus<double>());
+
+    if ( warp.thread_rank() == 0 ) {
+        atomicAdd( &(d_energy[0]), ene_E.x );
+        atomicAdd( &(d_energy[1]), ene_E.y );
+        atomicAdd( &(d_energy[2]), ene_E.z );
+
+        atomicAdd( &(d_energy[3]), ene_B.x );
+        atomicAdd( &(d_energy[4]), ene_B.y );
+        atomicAdd( &(d_energy[5]), ene_B.z );
+    }
+}
+
+
 /**
  * @brief Get total field energy per field component
  * 
  * @param energy    Array that will hold energy values
  */
 __host__
-void get_energy( double energy[6] ) {
-    std::cout << "(*warn*) EMF::get_energy() not implemented yet." << std::endl;
-    for( int i = 0; i < 6; i++) energy[i] = 0;
+void EMF::get_energy( double3 & ene_E, double3 & ene_B ) {
+
+    // Zero energy values
+    device::zero( d_energy, 6 );
+
+    dim3 grid( E->ntiles.x, E->ntiles.y );
+    dim3 block( 1024 );
+    _get_energy_kernel <<< grid, block >>> ( 
+        E->d_buffer, B->d_buffer,
+        E->nx, E->ext_nx(), E->offset(),
+        d_energy );
+    
+    double energy[6];
+    devhost_memcpy( energy, d_energy, 6 );
+    for( int i = 0; i < 6; i++ ) {
+        energy[i] *= 0.5 * dx.x * dx.y;
+    }
+
+    ene_E.x = energy[0];
+    ene_E.y = energy[1];
+    ene_E.z = energy[2];
+
+    ene_B.x = energy[3];
+    ene_B.y = energy[4];
+    ene_B.z = energy[5];
 }

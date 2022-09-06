@@ -4,10 +4,6 @@
 #include "util.cuh"
 #include "zdf-cpp.h"
 
-#include <cooperative_groups.h>
-#include <cooperative_groups/reduce.h>
-namespace cg = cooperative_groups;
-
 namespace part {
     enum quant { x, y, ux, uy, uz };
 }

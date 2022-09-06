@@ -78,7 +78,11 @@ Species::Species( std::string const name, float const m_q,
     iter = 0;
 
     // Default pusher type
-    push_type = pusher::euler;
+    push_type = pusher::boris;
+
+    // Initialize energy diagnostic
+    malloc_dev( d_energy, 1 );
+    device::zero( d_energy, 1 );
 }
 
 /**
@@ -89,6 +93,8 @@ Species::~Species() {
     delete( tmp );
     delete( particles );
     delete( density );
+
+    free_dev( d_energy );
 }
 
 /**
@@ -576,7 +582,7 @@ __device__
  * @param u 
  * @return float3 
  */
-inline float3 dudt_boris( const float alpha, float3 e, float3 b, float3 u)
+inline float3 dudt_boris( const float alpha, float3 e, float3 b, float3 u, double & energy )
 {
 
     // First half of acceleration
@@ -591,10 +597,14 @@ inline float3 dudt_boris( const float alpha, float3 e, float3 b, float3 u)
     );
 
     {
-        // Time centered tem / \gamma
-        const float alpha_gamma = alpha * rsqrtf( fmaf( ut.z, ut.z,
-                                            fmaf( ut.y, ut.y, 
-                                            fmaf( ut.x, ut.x, 1.0f ) ) ) );
+        const float utsq = fmaf( ut.z, ut.z, fmaf( ut.y, ut.y, ut.x * ut.x ) );
+        const float gamma = sqrtf( 1.0f + utsq );
+        
+        // Get time centered energy
+        energy += utsq / (gamma + 1.0f);
+
+        // Time centered \alpha / \gamma
+        const float alpha_gamma = alpha / gamma;
 
         // Rotation
         b.x *= alpha_gamma;
@@ -649,7 +659,7 @@ __device__
  * @param u 
  * @return float3 
  */
-inline float3 dudt_boris_euler( const float alpha, float3 e, float3 b, float3 u)
+inline float3 dudt_boris_euler( const float alpha, float3 e, float3 b, float3 u, double & energy )
 {
 
     // First half of acceleration
@@ -664,8 +674,14 @@ inline float3 dudt_boris_euler( const float alpha, float3 e, float3 b, float3 u)
     );
 
     {
-        float const alpha2_gamma = alpha * 2 * 
-            rsqrtf( fmaf( ut.z, ut.z, fmaf( ut.y, ut.y, fmaf( ut.x, ut.x, 1.0f ) ) ) );
+        const float utsq = fmaf( ut.z, ut.z, fmaf( ut.y, ut.y, ut.x * ut.x ) );
+        const float gamma = sqrtf( 1.0f + utsq );
+        
+        // Get time centered energy
+        energy += utsq / (gamma + 1.0f);
+        
+        // Time centered 2 * \alpha / \gamma
+        float const alpha2_gamma = ( alpha * 2 ) / gamma ;
 
         b.x *= alpha2_gamma;
         b.y *= alpha2_gamma;
@@ -695,7 +711,7 @@ inline float3 dudt_boris_euler( const float alpha, float3 e, float3 b, float3 u)
 
         u.x = fmaf( r11, ut.x, fmaf( r21, ut.y , r31 * ut.z ));
         u.y = fmaf( r12, ut.x, fmaf( r22, ut.y , r32 * ut.z ));
-        u.z = fmaf( r12, ut.x, fmaf( r23, ut.y , r33 * ut.z ));
+        u.z = fmaf( r13, ut.x, fmaf( r23, ut.y , r33 * ut.z ));
     }
 
 
@@ -796,10 +812,11 @@ void _push_kernel (
     int2* __restrict__ d_ix, float2* __restrict__ d_x, float3* __restrict__ d_u,
     float3 * __restrict__ d_E, float3 * __restrict__ d_B, 
     unsigned int const field_offset, uint2 const ext_nx,
-    float const alpha )
+    float const alpha, double * const __restrict__ d_energy )
 {
     auto block = cg::this_thread_block();
-    
+    auto warp  = cg::tiled_partition<32>(block);
+
     // Tile ID
     const int tid = blockIdx.y * gridDim.x + blockIdx.x;
 
@@ -813,11 +830,11 @@ void _push_kernel (
         buffer[i            ] = d_E[tile_off + i];
         buffer[field_vol + i] = d_B[tile_off + i];
     }
-    
-    float3 const * const E = buffer + field_offset;
-    float3 const * const B = E + field_vol; 
 
     block.sync();
+
+    float3 const * const E = buffer + field_offset;
+    float3 const * const B = E + field_vol; 
 
     // Push particles
     const int part_offset = d_tiles[ tid ].pos;
@@ -826,19 +843,24 @@ void _push_kernel (
     float2 __restrict__ *x   = &d_x[ part_offset ];
     float3 __restrict__ *u   = &d_u[ part_offset ];
 
+    double energy = 0;
+
     for( int i = threadIdx.x; i < np; i+= blockDim.x ) {
 
         // Interpolate field
         float3 e, b;
-        interpolate_fld( E, B, ext_nx.x,
-            ix[i], x[i], e, b );
+        interpolate_fld( E, B, ext_nx.x, ix[i], x[i], e, b );
         
         // Advance momentum
         float3 pu = u[i];
         
-        if ( type == pusher::boris ) u[i] = dudt_boris( alpha, e, b, pu );
-        if ( type == pusher::euler ) u[i] = dudt_boris_euler( alpha, e, b, pu );
+        if ( type == pusher::boris ) u[i] = dudt_boris( alpha, e, b, pu, energy );
+        if ( type == pusher::euler ) u[i] = dudt_boris_euler( alpha, e, b, pu, energy );
     }
+
+    // Add up energy from all warps    
+    energy = cg::reduce( warp, energy, cg::plus<double>());
+    if ( warp.thread_rank() == 0 ) atomicAdd( d_energy, energy );
 }
 
 __host__
@@ -868,19 +890,23 @@ void Species::push( VectorField * const E, VectorField * const B )
 
     const float alpha = 0.5 * dt / m_q;
 
+    device::zero(d_energy,1);
+
     switch( push_type ) {
     case( pusher :: euler ):
         _push_kernel <pusher::euler> <<< grid, block, shm_size >>> (
             particles -> tiles, 
             particles -> ix, particles -> x, particles -> u,
-            E -> d_buffer, B -> d_buffer, E -> offset(), ext_nx, alpha
+            E -> d_buffer, B -> d_buffer, E -> offset(), ext_nx, alpha,
+            d_energy
         );
         break;
     case( pusher :: boris ):
         _push_kernel <pusher::boris> <<< grid, block, shm_size >>> (
             particles -> tiles, 
             particles -> ix, particles -> x, particles -> u,
-            E -> d_buffer, B -> d_buffer, E -> offset(), ext_nx, alpha
+            E -> d_buffer, B -> d_buffer, E -> offset(), ext_nx, alpha,
+            d_energy
         );
         break;
     }

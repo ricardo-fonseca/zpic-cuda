@@ -180,7 +180,7 @@ void test_move_window() {
 
     sim.add_species( "electrons", -1.0f, ppc, density, UDistribution::None() );
 
-    sim.get_species(0) -> save_charge();
+    sim.species[0] -> save_charge();
 
     sim.set_moving_window();
 
@@ -192,7 +192,7 @@ void test_move_window() {
 
         sim.advance();
 
-        sim.get_species(0) -> save_charge();
+        sim.species[0] -> save_charge();
     }
 
     printf(" i = %3d, t = %g (finished)\n", sim.get_iter(), sim.get_t() );
@@ -254,12 +254,12 @@ void test_weibel() {
     sim.add_species( "positrons", +1.0f, ppc, Density::Uniform(1.0f), udist );
 
 
-    sim.get_species(0)-> save_phasespace ( 
+    sim.species[0]-> save_phasespace ( 
         phasespace::ux, make_float2( -1, 1 ), 128,
         phasespace::uz, make_float2( -1, 1 ), 128
         );
 
-    sim.get_species(1)-> save_phasespace ( 
+    sim.species[1]-> save_phasespace ( 
         phasespace::ux, make_float2( -1, 1 ), 128,
         phasespace::uz, make_float2( -1, 1 ), 128
         );
@@ -275,7 +275,6 @@ void test_weibel() {
     timer.start();
 
     while( sim.get_iter() < imax ) {
-
         sim.advance();
     }
 
@@ -283,6 +282,8 @@ void test_weibel() {
 
     printf("Simulation complete at i = %d\n", sim.get_iter());
     
+    sim.energy_info();
+
     sim.current -> save( fcomp::x );
     sim.current -> save( fcomp::y );
     sim.current -> save( fcomp::z );
@@ -351,11 +352,11 @@ void test_lwfa() {
     sim.emf -> save( emf::e, fcomp::y );
     sim.emf -> save( emf::e, fcomp::z );
 
-    sim.get_species(0)-> save_phasespace ( 
+    sim.species[0]-> save_phasespace ( 
         phasespace::x,  make_float2( 0., 20.48 ), 1024,
         phasespace::ux, make_float2( -2., 2 ), 512
         );
-    sim.get_species(0)->save();
+    sim.species[0]->save();
 
     printf("Elapsed time was: %.3f s\n", timer.elapsed( timer::s ));
 }

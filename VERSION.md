@@ -1,8 +1,17 @@
 # ZPIC CUDA Development
 
+## 2022.9.6
+
+* Implements energy diagnostics for both particles and fields
+  * This requires some minor changes to the `dudt_*` routines that add negligible calculations
+* Implements simple `Simulation::energy_info()` method to report global simulation energy
+* Removes `Simulation::get_species(int)` method, it was redundant (`Simulation.species[i]` is accessible)
+* Removes const qualifier from `Simulation::get_species(string)`
+
 ## 2022.9.5
 
 * Particle pusher can now be set using the `Species.push_type` member variable
+  * Defaults to `pusher::boris` (the traditional Boris push)
 * Fixes issue with particle tile sort with periodic boundaries
 * Implements `UDistribution::*` classes to handle temperature distributions:
   * Implements `None` (0), `Cold` (ufl only), and `Thermal` (uth, ufl)

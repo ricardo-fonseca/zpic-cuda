@@ -491,6 +491,17 @@ T exclusive_scan( T * const __restrict__ data, unsigned int const size ) {
     return sum.get();
 }
 
+template< typename T >
+__host__
+void zero( T * const __restrict__ data, unsigned int const size ) {
+    auto err = cudaMemsetAsync( data, 0, size * sizeof(T) );
+    if ( err != cudaSuccess ) {
+        std::cerr << "(*error*) Unable to zero device memory." << std::endl;
+        std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
+        exit(1);
+    }
+}
+
 }
 
 #endif

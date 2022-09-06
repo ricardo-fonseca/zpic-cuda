@@ -102,14 +102,10 @@ class Simulation {
     /**
      * @brief Gets a pointer to a specific species object
      * 
-     * @param id                Species ID
+     * @param name                Species name
      * @return Species const* 
      */
-    Species const * get_species( int const id ) {
-        return ( id >= 0 && id < species.size()) ? species[id] : nullptr;
-    }
-
-    Species const * get_species( std::string name ) {
+    Species * get_species( std::string name ) {
         int id = 0;
         for( id = 0; id < species.size(); id++ )
             if ( (species[id])->name == name ) break;
@@ -139,6 +135,24 @@ class Simulation {
     auto   get_iter() { return iter; };
     auto   get_dt() { return dt; };
     double get_t() { return iter * double(dt); };
+
+    void energy_info() {
+        std::cout << "(*info*) Energy at n = " << iter << ", t = " << iter * double(dt)  << "\n";
+        double part_ene = 0;
+        for (int i = 0; i < species.size(); i++) {
+            double kin = species[i]->get_energy();
+            std::cout << "(*info*) " << species[i]->name << " = " << kin << "\n";
+            part_ene += kin;
+        }
+
+        double3 ene_E, ene_B;
+        emf -> get_energy( ene_E, ene_B );
+        std::cout << "(*info*) Electric field = " << ene_E.x + ene_E.y + ene_E.z << "\n";
+        std::cout << "(*info*) Magnetic field = " << ene_B.x + ene_B.y + ene_B.z << "\n";
+
+        double total = part_ene + ene_E.x + ene_E.y + ene_E.z + ene_B.x + ene_B.y + ene_B.z;
+        std::cout << "(*info*) total = " << total << "\n";
+    }
 };
 
 

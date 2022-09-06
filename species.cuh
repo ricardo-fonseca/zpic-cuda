@@ -98,6 +98,8 @@ private:
         phasespace::quant quant0, float2 range0, unsigned const size0,
         phasespace::quant quant1, float2 range1, unsigned const size1 ) const;
 
+    double *d_energy;
+
 public:
 
     // Iteration
@@ -164,12 +166,14 @@ public:
      * 
      * @return double 
      */
-    double get_energy() {
-        // uint2 ntiles = particles -> ntiles;
-        // return device::reduction( d_energy_tile, ntiles.x * ntiles.y );
+    double get_energy() const {
+        
+        // Get energy from device memory
+        double h_energy;
+        devhost_memcpy( &h_energy, d_energy, 1 );
 
-        std::cerr << "(*warn*) " << __func__ << " not implemented yet." << std::endl;
-        return 0;
+        // Normalize and return
+        return h_energy * q * m_q * dx.x * dx.y;
     }
 
     __host__

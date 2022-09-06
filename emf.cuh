@@ -29,6 +29,8 @@ class EMF {
     __host__
     void move_window();
 
+    double * d_energy;
+
     public:
 
     // Electric and magnetic fields
@@ -66,7 +68,7 @@ class EMF {
     __host__ void add_laser( Laser::Pulse & laser );
 
     __host__ void save( emf::field const field, const fcomp::cart fc );
-    __host__ void get_energy( double energy[6] );
+    __host__ void get_energy( double3 & ene_E, double3 & ene_b );
 
 };
 

@@ -114,10 +114,6 @@ void _set_thermal(
  */
 void UDistribution::Thermal::set( Particles & part ) const {
 
-    std::cout << "(*info*) Setting 'Thermal' u distribution\n";
-    std::cout << "(*info*) uth(" << uth.x << "," << uth.y << "," << uth.z << ")\n";
-    std::cout << "(*info*) ufl(" << ufl.x << "," << ufl.y << "," << ufl.z << ")\n";
-
     // Set thermal momentum
     dim3 grid( part.ntiles.x, part.ntiles.y );
     dim3 block( 64 );
