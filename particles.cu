@@ -673,7 +673,7 @@ void _bnd_out_r2( int const lim,
  * @param tmp_d_x       Particle positions (temp buffer)
  * @param tmp_d_u       Particle momenta (temp buffer)
  */
-template < coord :: cart dir > 
+template < coord::cart dir > 
 __global__
 void _bnd_in( int const lim,
     t_part_tile * const __restrict__ d_tiles,

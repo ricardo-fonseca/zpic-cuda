@@ -146,7 +146,7 @@ public:
     void inject( bnd<unsigned int> range );
 
     __host__
-    void set_udist( UDistribution::Type const & udist ) { udist.set(*particles);};
+    void set_udist( UDistribution::Type const & udist, unsigned int seed ) { udist.set(*particles, seed );};
 
     __host__
     void advance( EMF const &emf, Current &current );

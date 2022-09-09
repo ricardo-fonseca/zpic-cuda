@@ -27,7 +27,7 @@ void _set_none( t_part_tile const * const __restrict__ d_tiles,
  * 
  * @param part  Particle data
  */
-void UDistribution::None::set( Particles & part ) const {
+void UDistribution::None::set( Particles & part, unsigned int seed ) const {
 
     dim3 grid( part.ntiles.x, part.ntiles.y );
     dim3 block( 64 );
@@ -62,12 +62,12 @@ void _set_cold( t_part_tile const * const __restrict__ d_tiles,
  * 
  * @param part  Particle data
  */
-void UDistribution::Cold::set( Particles & part ) const {
+void UDistribution::Cold::set( Particles & part, unsigned int seed ) const {
 
     dim3 grid( part.ntiles.x, part.ntiles.y );
     dim3 block( 64 );
     
-    _set_none <<< grid, block >>> ( part.tiles, part.u );
+    _set_cold <<< grid, block >>> ( part.tiles, part.u, ufl );
 }
 
 
@@ -112,15 +112,15 @@ void _set_thermal(
  * @brief Sets momentum of all particles in object using uth / ufl
  * 
  */
-void UDistribution::Thermal::set( Particles & part ) const {
+void UDistribution::Thermal::set( Particles & part, unsigned int seed ) const {
 
     // Set thermal momentum
     dim3 grid( part.ntiles.x, part.ntiles.y );
     dim3 block( 64 );
     
-    uint2 seed = {12345, 67890};
+    uint2 rnd_seed = {12345 + seed, 67890 };
     _set_thermal <<< grid, block >>> ( 
-        part.tiles, part.u, seed, uth, ufl
+        part.tiles, part.u, rnd_seed, uth, ufl
     );
 }
 
@@ -217,7 +217,7 @@ void _set_thermal_corr(
  * @brief Sets particle momentum correcting local ufl fluctuations
  * 
  */
-void UDistribution::ThermalCorr::set( Particles & part ) const {
+void UDistribution::ThermalCorr::set( Particles & part, unsigned int seed ) const {
 
     // Set thermal momentum
     dim3 grid( part.ntiles.x, part.ntiles.y );
@@ -225,8 +225,8 @@ void UDistribution::ThermalCorr::set( Particles & part ) const {
 
     size_t shm_size = part.nx.x * part.nx.y * (sizeof(float3) + sizeof(int));
     
-    uint2 seed = {12345, 67890};
+    uint2 rnd_seed = {12345 + seed, 67890 };
     _set_thermal_corr <<< grid, block, shm_size >>> ( 
-        part.tiles, part.u, part.ix, part.nx, seed, uth, ufl, npmin
+        part.tiles, part.u, part.ix, part.nx, rnd_seed, uth, ufl, npmin
     );
 }

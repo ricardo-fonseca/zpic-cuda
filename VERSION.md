@@ -1,5 +1,18 @@
 # ZPIC CUDA Development
 
+## Uncomitted
+
+__CRITICAL:__ Fixes critical issues
+
+* Fixes critical issue in Field and VectorField `::add_from_gc()` method.
+  * Adding in values from upper neighbour was not done properly.
+* Fixes critical issue with `pusher::euler`, rotation matrix was not properly implemented
+
+* Adds Courant condition checking to EMF class
+* Adds electric current filtering along y
+* Adds seeding parameter to "Species::set_u". This enables different species to use a different seed for the random number generator.
+
+
 ## 2022.9.6
 
 * Implements energy diagnostics for both particles and fields

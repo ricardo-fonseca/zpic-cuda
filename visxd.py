@@ -498,3 +498,34 @@ def grid2d_fft( filename : str, xlim = None, ylim = None, grid = False, cmap = N
     plt.grid(grid)
 
     plt.show()
+
+def plot_data( fld, iter, xlim = None, ylim = None, cmap = None, norm = None,
+    vsim = None, vmin = None, vmax = None, scale = None ):
+    
+    file = "{}-{:06d}.zdf".format(fld, iter)
+
+    if ( os.path.exists(file) ):
+        print("Plotting {}".format(file))
+        grid( file, xlim = xlim, ylim = ylim, grid = False, cmap = cmap, norm = norm,
+            vsim = vsim, vmin = vmin, vmax = vmax, scale = scale )
+    else:
+        print("(*error*) file {} not found.".format(file), file = sys.stderr )
+
+def plot_vfield2d( fld, iter, xlim = None, ylim = None, grid = False, norm = None, cmap = None ):
+    print("Plotting {} in plane field for iteration {}.".format(fld,iter))
+    
+    filex = "{}x-{:06d}.zdf".format(fld, iter)
+    filey = "{}y-{:06d}.zdf".format(fld, iter)
+
+    if ( not cmap ):
+        cmap = 'YlOrBr'
+    vfield2d( filex, filey, xlim = xlim, ylim = ylim, grid = grid, cmap = cmap,
+        title = "In-plane {} field".format(fld) )
+    
+    filez = "{}z-{:06d}.zdf".format(fld, iter)
+
+    if ( os.path.exists(filez) ):
+        if ( not norm ):
+            norm = colors.CenteredNorm()
+        print("Plotting {} out of plane field for iteration {}.".format(fld,iter))
+        grid2d(filez, xlim = xlim, ylim = ylim, grid = grid, cmap = 'BrBG', norm = colors.CenteredNorm())

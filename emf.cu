@@ -20,6 +20,15 @@ EMF::EMF( uint2 const ntiles, uint2 const nx, float2 const box,
     dx.x = box.x / ( nx.x * ntiles.x );
     dx.y = box.y / ( nx.y * ntiles.y );
 
+    // Verify Courant condition
+    float cour = sqrtf( 1.0f/( 1.0f/(dx.x*dx.x) + 1.0f/(dx.y*dx.y) ) );
+    if ( dt >= cour ){
+        std::cerr << "(*error*) Invalid timestep, courant condition violation.\n";
+        std::cerr << "(*error*) For current resolution (" << dx.x << "," << dx.y <<
+            ") the maximum timestep is dt = " << cour <<"\n";
+        exit(-1);
+    }
+
     // Guard cells (1 below, 2 above)
     // These are required for the Yee solver AND for field interpolation
     uint2 gc[2] = { make_uint2(1,1), make_uint2(2,2) }; 
@@ -429,27 +438,27 @@ void EMF::save( const emf::field field, fcomp::cart const fc ) {
 
     zdf::grid_axis axis[2];
     axis[0] = (zdf::grid_axis) {
-    	.name = (char *) "x",
-    	.min = 0.0 + moving_window.motion(),
-    	.max = box.x + moving_window.motion(),
-    	.label = (char *) "x",
-    	.units = (char *) "c/\\omega_n"
+        .name = (char *) "x",
+        .min = 0.0 + moving_window.motion(),
+        .max = box.x + moving_window.motion(),
+        .label = (char *) "x",
+        .units = (char *) "c/\\omega_n"
     };
 
     axis[1] = (zdf::grid_axis) {
         .name = (char *) "y",
-    	.min = 0.0,
-    	.max = box.y,
-    	.label = (char *) "y",
-    	.units = (char *) "c/\\omega_n"
+        .min = 0.0,
+        .max = box.y,
+        .label = (char *) "y",
+        .units = (char *) "c/\\omega_n"
     };
 
     zdf::grid_info info = {
         .name = vfname,
-    	.ndims = 2,
-    	.label = vflabel,
-    	.units = (char *) "m_e c \\omega_n e^{-1}",
-    	.axis = axis
+        .ndims = 2,
+        .label = vflabel,
+        .units = (char *) "m_e c \\omega_n e^{-1}",
+        .axis = axis
     };
 
     info.count[0] = E -> ntiles.x * E -> nx.x;
@@ -457,9 +466,9 @@ void EMF::save( const emf::field field, fcomp::cart const fc ) {
 
 
     zdf::iteration iteration = {
-    	.n = iter,
-    	.t = iter * dt,
-    	.time_units = (char *) "1/\\omega_n"
+        .n = iter,
+        .t = iter * dt,
+        .time_units = (char *) "1/\\omega_n"
     };
 
     f -> save( fc, info, iteration, "EMF" );

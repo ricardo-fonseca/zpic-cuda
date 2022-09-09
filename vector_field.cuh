@@ -146,6 +146,9 @@ class VectorField {
     void kernel3_x( float const a, float const b, float const c );
 
     __host__
+    void kernel3_y( float const a, float const b, float const c );
+
+    __host__
     /**
      * @brief  Save field values to disk
      * 

@@ -104,7 +104,8 @@ void test_sort_deposit() {
     Current current( ntiles, nx, box, dt );
 
     uint2 ppc = {8,8};
-    auto udist = UDistribution::Cold( make_float3(1000,1000,1000));
+//    auto udist = UDistribution::Cold( make_float3(1000,1000,1000));
+    auto udist = UDistribution::Cold( make_float3(+1000,+1000,+1000));
 
     bnd<unsigned int> range;
     range.x = { .lower = 128, .upper = 255 };
@@ -112,13 +113,16 @@ void test_sort_deposit() {
 
     // auto density = Density::Step( 1.0, 6.4 );
     // auto density =  Density::Slab( 1.0, 9.6, 16.0 );
-    auto density = Density::Sphere( 1.0, make_float2(12.8,12.8), 3.2 );
+    //auto density = Density::Sphere( 1.0, make_float2(12.8,12.8), 3.2 );
+    auto density = Density::Uniform( 1.0 );
 
     Species electrons( "electrons", -1, ppc, density, box, ntiles, nx, dt );
 
     electrons.inject( range );
+    electrons.set_udist( udist, 0 );
     electrons.particles->validate( "After injection");
-    electrons.set_udist( udist );
+
+
 
     electrons.save_charge();
     current.save( fcomp::x );
@@ -224,7 +228,7 @@ void test_filter() {
 
     emf.add_laser( laser );
 
-    Filter::Compensated filter(1);
+    Filter::Compensated filter( coord::x, 1 );
     filter.apply(*emf.E);
 
     emf.save( emf::e, fcomp::z );
@@ -361,6 +365,158 @@ void test_lwfa() {
     printf("Elapsed time was: %.3f s\n", timer.elapsed( timer::s ));
 }
 
+
+void diag_mushroom( Simulation & sim ) {
+
+    sim.species[0] -> save_charge();
+    sim.species[1] -> save_charge();
+    sim.species[2] -> save_charge();
+    sim.species[3] -> save_charge();
+
+    sim.current -> save( fcomp::x );
+    sim.current -> save( fcomp::y );
+    sim.current -> save( fcomp::z );
+
+    sim.emf -> save( emf::e, fcomp::x );
+    sim.emf -> save( emf::e, fcomp::y );
+    sim.emf -> save( emf::e, fcomp::z );
+
+    sim.emf -> save( emf::b, fcomp::x );
+    sim.emf -> save( emf::b, fcomp::y );
+    sim.emf -> save( emf::b, fcomp::z );
+
+}
+
+void test_mushroom() {
+
+    // Create simulation box
+    uint2 ntiles = {16, 16};
+    uint2 nx = {16,16};
+    float2 box = {25.6, 25.6};
+
+    float dt = 0.07;
+
+    Simulation sim( ntiles, nx, box, dt );
+
+    // Add particles species
+    uint2 ppc   = {8,8};
+    float3 ufl  = {0., 0., 0.2};
+    float3 uth_e = {0.001, 0.001, 0.001};
+    float3 uth_i = {0.0001, 0.0001, 0.0001};
+
+    auto udist_e = UDistribution::ThermalCorr( uth_e, ufl, 16 );
+    auto udist_i = UDistribution::ThermalCorr( uth_i, ufl, 16 );
+
+    sim.add_species( "electrons-up", -1.0f, ppc, Density::Slab(1.0f,0,12.8), udist_e );
+    sim.add_species( "ions-up",    +100.0f, ppc, Density::Slab(1.0f,0,12.8), udist_i );
+
+    udist_e.ufl.z = - udist_e.ufl.z;
+    udist_i.ufl.z = - udist_i.ufl.z;
+
+    sim.add_species( "electrons-down", -1.0f, ppc, Density::Slab(1.0f,12.8,25.6), udist_e );
+    sim.add_species( "ions-down",    +100.0f, ppc, Density::Slab(1.0f,12.8,25.6), udist_i );
+
+    // Run simulation
+    int const nmax = 2000 ;
+
+    printf("Running Mushroom test up to n = %d...\n", nmax );
+
+    Timer timer;
+
+    timer.start();
+
+    diag_mushroom( sim );
+
+    while( sim.get_iter() < nmax ) {
+        sim.advance();
+        if ( sim.get_iter() % 100 == 0 ) diag_mushroom( sim );
+    }
+
+    timer.stop();
+
+    printf("Simulation complete at t = %g\n", sim.get_t());
+
+
+    printf("Elapsed time was: %.3f s\n", timer.elapsed( timer::s ));
+}
+
+
+void diag_kh( Simulation & sim ) {
+
+    sim.species[0] -> save_charge();
+    sim.species[1] -> save_charge();
+    sim.species[2] -> save_charge();
+    sim.species[3] -> save_charge();
+
+    sim.current -> save( fcomp::x );
+    sim.current -> save( fcomp::y );
+    sim.current -> save( fcomp::z );
+
+    sim.emf -> save( emf::e, fcomp::x );
+    sim.emf -> save( emf::e, fcomp::y );
+    sim.emf -> save( emf::e, fcomp::z );
+
+    sim.emf -> save( emf::b, fcomp::x );
+    sim.emf -> save( emf::b, fcomp::y );
+    sim.emf -> save( emf::b, fcomp::z );
+
+}
+
+void test_kh() {
+
+    // Create simulation box
+    uint2 ntiles = {16, 16};
+    uint2 nx = {16,16};
+    float2 box = {12.8, 12.8};
+
+    float dt = 0.035;
+
+    Simulation sim( ntiles, nx, box, dt );
+
+    // Add particles species
+    uint2 ppc   = {8,8};
+    float3 ufl  = {0., 0.2, 0.};
+    float3 uth_e = {0.001, 0.001, 0.001};
+    float3 uth_i = {0.0001, 0.0001, 0.0001};
+
+    auto udist_e = UDistribution::ThermalCorr( uth_e, ufl, 16 );
+    auto udist_i = UDistribution::ThermalCorr( uth_i, ufl, 16 );
+
+    sim.add_species( "electrons-up", -1.0f, ppc, Density::Slab(1.0f,0,box.x/2), udist_e );
+    sim.add_species( "ions-up",    +100.0f, ppc, Density::Slab(1.0f,0,box.x/2), udist_i );
+
+    udist_e.ufl.y = - udist_e.ufl.y;
+    udist_i.ufl.y = - udist_i.ufl.y;
+
+    sim.add_species( "electrons-down", -1.0f, ppc, Density::Slab(1.0f,box.x/2,box.x), udist_e );
+    sim.add_species( "ions-down",    +100.0f, ppc, Density::Slab(1.0f,box.x/2,box.x), udist_i );
+
+    sim.current->set_filter( Filter::Binomial ( coord::y, 2 ) );
+
+    // Run simulation
+    int const nmax = 2000 ;
+
+    printf("Running Kelvin-Helmholtz test up to n = %d...\n", nmax );
+
+    Timer timer;
+
+    timer.start();
+
+    diag_kh( sim );
+
+    while( sim.get_iter() < nmax ) {
+        sim.advance();
+        if ( sim.get_iter() % 100 == 0 ) diag_kh( sim );
+    }
+
+    timer.stop();
+
+    printf("Simulation complete at t = %g\n", sim.get_t());
+
+
+    printf("Elapsed time was: %.3f s\n", timer.elapsed( timer::s ));
+}
+
 int main() {
 
     // test_emf();
@@ -371,9 +527,13 @@ int main() {
 
     // test_filter();
 
-    test_weibel();
+    // test_weibel();
 
     // test_lwfa();
+
+    // test_mushroom();
+
+    test_kh();
 
     return 0;
 }

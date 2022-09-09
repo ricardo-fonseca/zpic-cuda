@@ -466,10 +466,10 @@ void _add_gcx_kernel(
         for( int idx = threadIdx.x; idx < ext_nx.y * gcx0; idx += blockDim.x ) {
             const int i = idx % gcx0;
             const int j = idx / gcx0;
-            float3 a = local[ int_nx.x - gcx0 + i + j * ext_nx.x ];
+            float3 a = local[ int_nx.x + i + j * ext_nx.x ];
             float3 b = x_upper[ i + j * ext_nx.x ];
             a.x += b.x; a.y += b.y; a.z += b.z;
-            local[ int_nx.x - gcx0 + i + j * ext_nx.x ] = a;
+            local[ int_nx.x + i + j * ext_nx.x ] = a;
         }
     }
 }
@@ -529,10 +529,10 @@ void _add_gcy_kernel(
         for( int idx = threadIdx.x; idx < gcy0 * ext_nx.x; idx += blockDim.x ) {
             const int i = idx % ext_nx.x;
             const int j = idx / ext_nx.x;
-            float3 a = local[ i + ( int_nx.y - gcy0 + j ) * ext_nx.x ];
+            float3 a = local[ i + ( int_nx.y + j ) * ext_nx.x ];
             float3 b = y_upper[ i + j * ext_nx.x ];
             a.x += b.x; a.y += b.y; a.z += b.z;
-            local[ i + ( int_nx.y - gcy0 + j ) * ext_nx.x ] = a;
+            local[ i + ( int_nx.y + j ) * ext_nx.x ] = a;
         }
     }
 }
@@ -693,6 +693,80 @@ void VectorField::kernel3_x( float const a, float const b, float const c ) {
 
     } else {
         std::cerr << "(*error*) VectorField::kernel_x3() requires at least 1 guard cell at both the lower and upper x boundaries.\n";
+        exit(1);
+    }
+}
+
+__global__
+/**
+ * @brief CUDA kernel for VectorField::kernel3_x
+ * 
+ * @param a         Convolution kernel a value
+ * @param b         Convolution kernel b value
+ * @param c         Convolution kernel c value
+ * @param buffer    Data buffer
+ * @param int_nx    Internal tile size
+ * @param ext_nx    External tile size
+ * @param offset    Offset to position (0,0) on tile
+ */
+void _kernel3_y( float const a, float const b, float const c, 
+    float3 * const __restrict__ buffer, 
+    uint2 const int_nx, uint2 const ext_nx, unsigned int const offset )
+{
+
+    auto block = cg::this_thread_block();
+    extern __shared__ float3 local[];
+
+    const int tile_off = ((blockIdx.y * gridDim.x) + blockIdx.x) * ext_nx.x * ext_nx.y;
+
+    // Copy data into shared memory
+    for( int i = block.thread_rank(); i < ext_nx.x * ext_nx.y; i += block.num_threads() ) 
+        local[i] = buffer[ tile_off + i ];
+
+    block.sync();
+
+    // Do kernel convolution and store back to device memory
+    const int stride = ext_nx.x;
+    float3 * __restrict__ tmp = local + offset;
+
+    for( int idx = block.thread_rank(); idx < int_nx.x * int_nx.y; idx += block.num_threads() ) {
+        const int i = idx % int_nx.x;
+        const int j = idx / int_nx.x;
+
+        float3 val;
+
+        val.x = a * tmp[ (j-1)*stride + i ].x + b * tmp[ j*stride + i ].x + c * tmp[ (j+1)*stride + i ].x;
+        val.y = a * tmp[ (j-1)*stride + i ].y + b * tmp[ j*stride + i ].y + c * tmp[ (j+1)*stride + i ].y;
+        val.z = a * tmp[ (j-1)*stride + i ].z + b * tmp[ j*stride + i ].z + c * tmp[ (j+1)*stride + i ].z;
+
+        buffer[ tile_off + offset + j*stride + i ] = val;
+    }
+}
+
+/**
+ * @brief Perform a convolution with a 3 point kernel [a,b,c] along y
+ * 
+ * @param a     Kernel a value
+ * @param b     Kernel b value
+ * @param c     Kernel c value
+ */
+void VectorField::kernel3_y( float const a, float const b, float const c ) {
+
+    if (( gc[0].y > 0) && (gc[1].y > 0)) {
+
+        uint2 ext = ext_nx();
+
+        dim3 block( 64 );
+        dim3 grid( ntiles.x, ntiles.y );
+
+        size_t shm_size = ext.x * ext.y * sizeof(float3);
+
+        _kernel3_y<<< grid, block, shm_size >>> ( a, b, c, d_buffer, nx, ext, offset() );
+        
+        _copy_gcy_kernel <<<grid, block>>> ( d_buffer, 0, ext, nx, gc[0].y, gc[1].y );
+
+    } else {
+        std::cerr << "(*error*) VectorField::kernel3_y() requires at least 1 guard cell at both the lower and upper y boundaries.\n";
         exit(1);
     }
 }

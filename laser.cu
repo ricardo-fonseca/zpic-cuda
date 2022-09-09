@@ -6,6 +6,7 @@
 namespace cg=cooperative_groups;
 
 #include "filter.cuh"
+#include "util.cuh"
 
 __host__
 /**
@@ -176,7 +177,7 @@ int Laser::PlaneWave::launch( VectorField& E, VectorField& B, float2 box ) {
     B.copy_to_gc();
 
     if ( filter > 0 ) {
-        Filter::Compensated fcomp(filter);
+        Filter::Compensated fcomp( coord::x, filter);
         fcomp.apply(E);
         fcomp.apply(B);
     }
@@ -560,7 +561,7 @@ int Laser::Gaussian::launch(VectorField& E, VectorField& B, float2 const box ) {
     B.copy_to_gc();
 
     if ( filter > 0 ) {
-        Filter::Compensated fcomp(filter);
+        Filter::Compensated fcomp( coord::x, filter );
         fcomp.apply(E);
         fcomp.apply(B);
     }

@@ -96,7 +96,7 @@ class Simulation {
         s -> inject( );
 
         // Set momentum distribution
-        s -> set_udist( udist );
+        s -> set_udist( udist, species.size() );
     }
 
     /**

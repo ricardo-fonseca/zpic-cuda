@@ -10,13 +10,13 @@ namespace UDistribution {
     class Type {
         public:
         virtual Type * clone() const = 0;
-        virtual void set( Particles & part ) const = 0;
+        virtual void set( Particles & part, unsigned int seed ) const = 0;
     };
     
     class None : public Type {
         public:
         None * clone() const override { return new None(); };
-        void set( Particles & part ) const override ;
+        void set( Particles & part, unsigned int seed ) const override ;
     };
 
     class Cold : public Type {
@@ -24,7 +24,7 @@ namespace UDistribution {
         float3 ufl;
         Cold( float3 const ufl ) : ufl(ufl) {};
         Cold * clone() const override { return new Cold(ufl); };
-        void set( Particles & part ) const override ;
+        void set( Particles & part, unsigned int seed ) const override ;
     };
 
     class Thermal : public Type {
@@ -34,7 +34,7 @@ namespace UDistribution {
         Thermal( float3 const uth, float3 const ufl ) : uth(uth), ufl(ufl) {};
 
         Thermal * clone() const override { return new Thermal(uth, ufl); };
-        void set( Particles & part ) const override ;
+        void set( Particles & part, unsigned int seed ) const override ;
     };
 
     class ThermalCorr : public Type {
@@ -52,7 +52,7 @@ namespace UDistribution {
         };
 
         ThermalCorr * clone() const override { return new ThermalCorr(uth, ufl,npmin); };
-        void set( Particles & part ) const override ;
+        void set( Particles & part, unsigned int seed ) const override ;
     };
 }
 
