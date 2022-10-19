@@ -317,7 +317,7 @@ void test_lwfa() {
     // Add particles species
     uint2 ppc  = {4,4};
 
-    sim.add_species( "electrons", -1.0f, ppc, Density::Step(1.0f,20.48), UDistribution::None() );
+    sim.add_species( "electrons", -1.0f, ppc, Density::Step( coord::x, 1.0, 20.48 ), UDistribution::None() );
 
     Laser::Gaussian laser;
     laser.start = 17.0;
@@ -407,14 +407,14 @@ void test_mushroom() {
     auto udist_e = UDistribution::ThermalCorr( uth_e, ufl, 16 );
     auto udist_i = UDistribution::ThermalCorr( uth_i, ufl, 16 );
 
-    sim.add_species( "electrons-up", -1.0f, ppc, Density::Slab(1.0f,0,12.8), udist_e );
-    sim.add_species( "ions-up",    +100.0f, ppc, Density::Slab(1.0f,0,12.8), udist_i );
+    sim.add_species( "electrons-up", -1.0f, ppc, Density::Slab(coord::y,1.0,0,box.y/2), udist_e );
+    sim.add_species( "ions-up",    +100.0f, ppc, Density::Slab(coord::y,1.0,0,box.y/2), udist_i );
 
     udist_e.ufl.z = - udist_e.ufl.z;
     udist_i.ufl.z = - udist_i.ufl.z;
 
-    sim.add_species( "electrons-down", -1.0f, ppc, Density::Slab(1.0f,12.8,25.6), udist_e );
-    sim.add_species( "ions-down",    +100.0f, ppc, Density::Slab(1.0f,12.8,25.6), udist_i );
+    sim.add_species( "electrons-down", -1.0f, ppc, Density::Slab(coord::y,1.0,box.y/2,box.y), udist_e );
+    sim.add_species( "ions-down",    +100.0f, ppc, Density::Slab(coord::y,1.0,box.y/2,box.y), udist_i );
 
     // Run simulation
     int const nmax = 2000 ;
@@ -467,36 +467,36 @@ void test_kh() {
     // Create simulation box
     uint2 ntiles = {16, 16};
     uint2 nx = {16,16};
-    float2 box = {12.8, 12.8};
+    float2 box = {25.6, 25.6};
 
-    float dt = 0.035;
+    float dt = 0.07;
 
     Simulation sim( ntiles, nx, box, dt );
 
     // Add particles species
     uint2 ppc   = {8,8};
-    float3 ufl  = {0., 0.2, 0.};
+    float3 ufl  = {0.2, 0., 0.};
     float3 uth_e = {0.001, 0.001, 0.001};
     float3 uth_i = {0.0001, 0.0001, 0.0001};
 
     auto udist_e = UDistribution::ThermalCorr( uth_e, ufl, 16 );
     auto udist_i = UDistribution::ThermalCorr( uth_i, ufl, 16 );
 
-    sim.add_species( "electrons-up", -1.0f, ppc, Density::Slab(1.0f,0,box.x/2), udist_e );
-    sim.add_species( "ions-up",    +100.0f, ppc, Density::Slab(1.0f,0,box.x/2), udist_i );
+    sim.add_species( "electrons-r", -1.0f, ppc, Density::Slab(coord::y,1.0,0,box.y/2), udist_e );
+    sim.add_species( "ions-r",    +100.0f, ppc, Density::Slab(coord::y,1.0,0,box.y/2), udist_i );
 
-    udist_e.ufl.y = - udist_e.ufl.y;
-    udist_i.ufl.y = - udist_i.ufl.y;
+    udist_e.ufl.x = - udist_e.ufl.x;
+    udist_i.ufl.x = - udist_i.ufl.x;
 
-    sim.add_species( "electrons-down", -1.0f, ppc, Density::Slab(1.0f,box.x/2,box.x), udist_e );
-    sim.add_species( "ions-down",    +100.0f, ppc, Density::Slab(1.0f,box.x/2,box.x), udist_i );
+    sim.add_species( "electrons-l", -1.0f, ppc, Density::Slab(coord::y,1.0,box.y/2,box.y), udist_e );
+    sim.add_species( "ions-l",    +100.0f, ppc, Density::Slab(coord::y,1.0,box.y/2,box.y), udist_i );
 
-    sim.current->set_filter( Filter::Binomial ( coord::y, 2 ) );
+    sim.current->set_filter( Filter::Binomial ( coord::x, 2 ) );
 
     // Run simulation
-    int const nmax = 2000 ;
+    float const tmax = 100 ;
 
-    printf("Running Kelvin-Helmholtz test up to n = %d...\n", nmax );
+    printf("Running Kelvin-Helmholtz test up to t = %g...\n", tmax );
 
     Timer timer;
 
@@ -504,7 +504,7 @@ void test_kh() {
 
     diag_kh( sim );
 
-    while( sim.get_iter() < nmax ) {
+    while( sim.get_t() < tmax ) {
         sim.advance();
         if ( sim.get_iter() % 100 == 0 ) diag_kh( sim );
     }

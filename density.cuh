@@ -23,6 +23,10 @@ namespace Density {
         virtual void inject( Particles * part, uint2 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range ) const = 0;
     };
 
+    /**
+     * @brief Uniform plasma density
+     * 
+     */
     class Uniform : public Profile {
 
         public:
@@ -35,32 +39,51 @@ namespace Density {
         void inject( Particles * part, uint2 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range ) const override;
     };
 
+    /**
+     * @brief Step (Heavyside) plasma density
+     * 
+     * Uniform plasma density after a given position. Can be set in either x or y coordinates
+     */
     class Step : public Profile {
         private:
         float pos;
+        coord::cart dir;
         public:
-        Step( float const n0, float const pos ) : Profile(n0), pos(pos) {};
+        Step( coord::cart dir, float const n0, float const pos ) : Profile(n0), pos(pos), dir(dir) {};
 
         Step * clone() const override {
-            return new Step(n0,pos);
+            return new Step( dir, n0, pos );
         };
 
         void inject( Particles * part, uint2 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range ) const override;
     };
 
+    /**
+     * @brief Slab plasma density
+     * 
+     * Uniform plasma density inside given 1D range. Can be set in either x or y coordinates
+     * 
+     */
     class Slab : public Profile {
         private:
         float begin, end;
+        coord::cart dir;
         public:
-        Slab( float const n0, float begin, float end ) : Profile(n0), begin(begin), end(end) {};
+        Slab( coord::cart dir, float const n0, float begin, float end ) : Profile(n0), begin(begin), end(end), dir(dir) {};
         
         Slab * clone() const override {
-            return new Slab(n0, begin, end);
+            return new Slab( dir, n0, begin, end );
         };
 
         void inject( Particles * part, uint2 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range ) const override;
     };
 
+    /**
+     * @brief Sphere plasma density
+     * 
+     * Uniform plasma density centered about a given position
+     * 
+     */
     class Sphere : public Profile {
         private:
         float2 center;

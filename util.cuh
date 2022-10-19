@@ -30,6 +30,7 @@ class bnd {
     } y;
 
     bnd() : x({0,0}), y({0,0}) {};
+    bnd( T val ) : x({val,val}), y({val,val}) {};
 };
 
 

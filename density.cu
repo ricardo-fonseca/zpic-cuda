@@ -113,6 +113,7 @@ void Density::Uniform::inject( Particles * part,
  * @param d_x       Particle buffer (positions)
  * @param d_u       Particle buffer (momenta)
  */
+template < coord::cart dir >
 __global__
 void _inject_step_kernel( bnd<unsigned int> range,
     const float step, const uint2 ppc, const uint2 nx,
@@ -157,6 +158,7 @@ void _inject_step_kernel( bnd<unsigned int> range,
         np = d_tiles[ tid ].n;
 
         const int shiftx = blockIdx.x * nx.x;
+        const int shifty = blockIdx.y * nx.y;
 
         for( int idx = threadIdx.x; idx < vol; idx+= blockDim.x) {
             int2 const cell = make_int2(
@@ -169,7 +171,9 @@ void _inject_step_kernel( bnd<unsigned int> range,
                         dpcx * ( i0 + 0.5 ) - 0.5,
                         dpcy * ( i1 + 0.5 ) - 0.5
                     );
-                    auto t = (shiftx + cell.x) + (pos.x + 0.5);
+                    float t;
+                    if ( dir == coord::x ) t = (shiftx + cell.x) + (pos.x + 0.5);
+                    if ( dir == coord::y ) t = (shifty + cell.y) + (pos.y + 0.5);
                     if ( t > step ) {
                         const int k = atomicAdd( &np, 1 );
                         ix[ k ] = cell;
@@ -195,9 +199,19 @@ void Density::Step::inject( Particles * part,
 
     float step_pos = (pos - ref.x) / dx.x;
 
-    _inject_step_kernel <<< grid, block >>> (
-        range, step_pos, ppc, part -> nx, 
-        part -> tiles, part -> ix, part -> x, part -> u );
+    switch( dir ) {
+    case( coord::x ):
+        _inject_step_kernel <coord::x> <<< grid, block >>> (
+            range, step_pos, ppc, part -> nx, 
+            part -> tiles, part -> ix, part -> x, part -> u );
+        break;
+    case( coord::y ):
+        _inject_step_kernel <coord::y> <<< grid, block >>> (
+            range, step_pos, ppc, part -> nx, 
+            part -> tiles, part -> ix, part -> x, part -> u );
+        break;
+    break;
+    }
 }
 
 /**
@@ -209,11 +223,12 @@ void Density::Step::inject( Particles * part,
  * @param slab      slab start/end position normalized to cell size
  * @param ppc       Number of particles per cell
  * @param nx        Tile size
- * @param d_tiles    Tile information
+ * @param d_tiles   Tile information
  * @param d_ix      Particle buffer (cells)
  * @param d_x       Particle buffer (positions)
  * @param d_u       Particle buffer (momenta)
  */
+template < coord::cart dir >
 __global__
 void _inject_slab_kernel( bnd<unsigned int> range,
     const float start, const float finish, uint2 ppc, uint2 nx,
@@ -259,6 +274,7 @@ void _inject_slab_kernel( bnd<unsigned int> range,
         np = d_tiles[ tid ].n;
 
         const int shiftx = blockIdx.x * nx.x;
+        const int shifty = blockIdx.y * nx.y;
 
         for( int idx = threadIdx.x; idx < vol; idx+= blockDim.x) {
             int2 const cell = make_int2(
@@ -271,7 +287,9 @@ void _inject_slab_kernel( bnd<unsigned int> range,
                         dpcx * ( i0 + 0.5 ) - 0.5,
                         dpcy * ( i1 + 0.5 ) - 0.5
                     );
-                    auto t = (shiftx + cell.x) + (pos.x + 0.5);
+                    float t;
+                    if ( dir == coord::x ) t = (shiftx + cell.x) + (pos.x + 0.5);
+                    if ( dir == coord::y ) t = (shifty + cell.y) + (pos.y + 0.5);
                     if ((t > start) && (t<finish )) {
                         const int k = atomicAdd( &np, 1 );
                         ix[ k ] = cell;
@@ -299,9 +317,19 @@ void Density::Slab::inject( Particles * part,
     float slab_begin = (begin - ref.x)/ dx.x;
     float slab_end = (end - ref.x)/ dx.x;
 
-    _inject_slab_kernel <<< grid, block >>> (
-        range, slab_begin, slab_end, ppc, part -> nx, 
-        part -> tiles, part -> ix, part -> x, part -> u  );
+    switch( dir ) {
+    case( coord::x ):
+        _inject_slab_kernel < coord::x > <<< grid, block >>> (
+            range, slab_begin, slab_end, ppc, part -> nx, 
+            part -> tiles, part -> ix, part -> x, part -> u  );
+        break;
+    case( coord::y ):
+        _inject_slab_kernel < coord::y > <<< grid, block >>> (
+            range, slab_begin, slab_end, ppc, part -> nx, 
+            part -> tiles, part -> ix, part -> x, part -> u  );
+        break;
+    }
+
 }
 
 /**

@@ -31,7 +31,9 @@ EMF::EMF( uint2 const ntiles, uint2 const nx, float2 const box,
 
     // Guard cells (1 below, 2 above)
     // These are required for the Yee solver AND for field interpolation
-    uint2 gc[2] = { make_uint2(1,1), make_uint2(2,2) }; 
+    bnd<unsigned int> gc;
+    gc.x = {1,2};
+    gc.y = {1,2};
 
     E = new VectorField( ntiles, nx, gc );
     B = new VectorField( ntiles, nx, gc );
@@ -40,11 +42,14 @@ EMF::EMF( uint2 const ntiles, uint2 const nx, float2 const box,
     E -> zero();
     B -> zero();
 
-    // Reserve device memory for energy diagnostic
-    malloc_dev( d_energy, 6 );
+    // Set default boundary conditions to periodic
+    bc = bnd<emf::bc::type> (emf::bc::periodic);
 
     // Reset iteration number
     iter = 0;
+
+    // Reserve device memory for energy diagnostic
+    malloc_dev( d_energy, 6 );
 
     std::cout << "(*info*) EMF object initialized" << std::endl;
 }
@@ -182,6 +187,25 @@ void yee_kernel(
     }
 }
 
+/**
+ * @brief Move simulation window
+ * 
+ * When using a moving simulation window checks if a window move is due
+ * at the current iteration and if so shifts left the data, zeroing the
+ * rightmost cells.
+ * 
+ */
+void EMF::move_window() {
+
+    if ( moving_window.needs_move( iter * dt ) ) {
+
+        E->x_shift_left(1);
+        B->x_shift_left(1);
+
+        moving_window.advance();
+    }
+}
+
 
 /**
  * @brief Advance EM fields 1 time step (no current)
@@ -212,6 +236,9 @@ void EMF::advance() {
     E -> copy_to_gc();
     B -> copy_to_gc();
 
+    // Do additional bc calculations if needed
+    process_bc();
+
     // Advance internal iteration number
     iter += 1;
 
@@ -220,6 +247,60 @@ void EMF::advance() {
 
 }
 
+
+__global__
+void _emf_bcx( const int ntiles_x, emf::bc_type bc ) {
+
+    int tid = blockIdx.y * ntiles_x;
+    if ( blockIdx.x == 1 ) 
+
+    // Lower boundary
+    if ( blockIdx.x == 0 ) {
+        switch( bc.x.lower ) {
+        case( emf::bc::pmc) :
+            for( int idx = threadIdx.x; idx < ext_nx.y * gc.lower; idx += blockDim.x ) {
+                E[ -1, j ].x =  E[ 0, j ].x;
+                E[ -1, j ].y =  E[ 1, j ].y;
+                E[ -1, j ].z =  E[ 1, j ].z;
+
+                B[ -1, j ].x =  B[ 1, j ].x;
+                B[ -1, j ].y = -B[ 0, j ].y;
+                B[ -1, j ].z = -B[ 0, j ].z;
+            }
+            break;
+        case( emf::bc::pec) :
+        break;
+        }
+    // Upper boundary
+    } else {
+        tid += ntiles_x - 1;
+
+    }
+
+}
+
+__global__
+void _emf_bcy() {
+    
+}
+
+
+__host__
+void EMF::process_bc() {
+
+    dim3 block( 64 );
+
+    if ( bc.x.lower > emf::bc::periodic || bc.x.upper > emf::bc::periodic ) {
+        dim3 grid( 2, E->ntiles.y );
+        _emf_bcx <<< grid, block >>> ();
+    }
+
+    if ( bc.y.lower > emf::bc::periodic || bc.y.upper > emf::bc::periodic ) {
+        dim3 grid( E->ntiles.x, 2 );
+        _emf_bcy <<< grid, block >>> ();
+    }
+
+}
 
 /**
  * @brief E advance for Yee algorithm, including current
@@ -353,6 +434,9 @@ void EMF::advance( Current & current ) {
     E -> copy_to_gc( );
     B -> copy_to_gc( );
 
+    // Do additional bc calculations if needed
+    process_bc();
+
     // Advance internal iteration number
     iter += 1;
 
@@ -360,24 +444,7 @@ void EMF::advance( Current & current ) {
     move_window();
 }
 
-/**
- * @brief Move simulation window
- * 
- * When using a moving simulation window checks if a window move is due
- * at the current iteration and if so shifts left the data, zeroing the
- * rightmost cells.
- * 
- */
-void EMF::move_window() {
 
-    if ( moving_window.needs_move( iter * dt ) ) {
-
-        E->x_shift_left(1);
-        B->x_shift_left(1);
-
-        moving_window.advance();
-    }
-}
 
 /**
  * @brief Add laser field to simulation

@@ -145,6 +145,9 @@ class Simulation {
             part_ene += kin;
         }
 
+        if ( species.size() > 1 )
+            std::cout << "(*info*) Total particle energy = " << part_ene << "\n";
+
         double3 ene_E, ene_B;
         emf -> get_energy( ene_E, ene_B );
         std::cout << "(*info*) Electric field = " << ene_E.x + ene_E.y + ene_E.z << "\n";

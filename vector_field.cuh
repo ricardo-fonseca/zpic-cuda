@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <iostream>
 #include "zdf-cpp.h"
+#include "util.cuh"
 
 /**
  * @brief VectorField class
@@ -20,11 +21,11 @@ class VectorField {
 
     uint2 ntiles;       // Number of tiles in each direction
     uint2 nx;            // Tile grid size
-    uint2 gc[2];         // Tile guard cells
+    bnd<unsigned int> gc;         // Tile guard cells
 
     int2 periodic;
 
-    __host__ VectorField( uint2 const ntiles, uint2 const nx, uint2 const gc[2]);
+    __host__ VectorField( uint2 const ntiles, uint2 const nx, bnd<unsigned int> const gc );
     __host__ VectorField( uint2 const ntiles, uint2 const nx );
     __host__ ~VectorField();
 
@@ -65,7 +66,8 @@ class VectorField {
      */
     __host__
     std::size_t tile_size() {
-        return ( gc[0].x + nx.x + gc[1].x ) * ( gc[0].y + nx.y + gc[1].y );
+        return ( gc.x.lower + nx.x + gc.x.upper ) * 
+               ( gc.y.lower + nx.y + gc.y.upper );
     };
 
     /**
@@ -99,8 +101,8 @@ class VectorField {
     __host__
     uint2 ext_nx() {
         return make_uint2(
-           gc[0].x +  nx.x + gc[1].x,
-           gc[0].y +  nx.y + gc[1].y
+           gc.x.lower +  nx.x + gc.x.upper,
+           gc.y.lower +  nx.y + gc.y.upper
         );
     };
 
@@ -111,8 +113,8 @@ class VectorField {
      */
     __host__
     size_t ext_vol() {
-        return ( gc[0].x +  nx.x + gc[1].x ) *
-               ( gc[0].y +  nx.y + gc[1].y );
+        return ( gc.x.lower +  nx.x + gc.x.upper ) *
+               ( gc.y.lower +  nx.y + gc.y.upper );
     }
 
     /**
@@ -122,7 +124,7 @@ class VectorField {
      */
     __host__
     unsigned int offset() {
-        return gc[0].y * (gc[0].x +  nx.x + gc[1].x) + gc[0].x;
+        return gc.y.lower * (gc.x.lower +  nx.x + gc.x.upper) + gc.x.lower;
     }
 
     /**

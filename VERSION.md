@@ -1,6 +1,12 @@
 # ZPIC CUDA Development
 
-## Uncomitted
+## 2022.10.19
+
+* Adds documentation file
+* Adds support for step and slab profiles along y
+* Adds total particle energy output to energy info
+
+## 2022.9.9
 
 __CRITICAL:__ Fixes critical issues
 
