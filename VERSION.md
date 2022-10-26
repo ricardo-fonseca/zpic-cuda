@@ -1,5 +1,16 @@
 # ZPIC CUDA Development
 
+## TO-DO
+
+* Refelecting boundaries for currents
+* Reflecting and thermal boundaries for particles
+* Improve particle tile sorter, make it production ready
+
+## 2022.10.26
+
+* PEC and PMC boundaries for EM fields
+* Use bnd<T> type for boundary related information (number of guard cells, bc type)
+
 ## 2022.10.19
 
 * Adds documentation file

@@ -28,8 +28,10 @@ Current::Current( uint2 const ntiles, uint2 const nx, float2 const box,
     dx.y = box.y / ( nx.y * ntiles.y );
 
     // Guard cells (1 below, 2 above)
-    // These are required for the Yee solver AND for field interpolation
-    uint2 gc[2] = { make_uint2(1,1), make_uint2(2,2)}; 
+    // These are required for the Yee solver AND for current deposition
+    bnd<unsigned int> gc;
+    gc.x = {1,2};
+    gc.y = {1,2};
 
     J = new VectorField( ntiles, nx, gc );
 

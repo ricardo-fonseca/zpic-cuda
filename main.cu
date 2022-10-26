@@ -517,6 +517,78 @@ void test_kh() {
     printf("Elapsed time was: %.3f s\n", timer.elapsed( timer::s ));
 }
 
+void test_bcemf() {
+
+    // Create simulation box
+    uint2 ntiles = {32, 16};
+    uint2 nx = {32,16};
+    float2 box = {20.48, 25.6};
+
+    float dt = 0.014;
+
+    Simulation sim( ntiles, nx, box, dt );
+
+    // emf::bc_type emf_bc(emf::bc::pmc);
+    emf::bc_type emf_bc(emf::bc::pec);
+
+    sim.emf->set_bc(emf_bc); 
+
+
+    Laser::Gaussian laser;
+    laser.start = 17.0;
+    laser.fwhm = 2.0;
+    laser.a0 = 3.0;
+    laser.omega0 = 10.0;
+    laser.W0 = 4.0;
+    laser.focus = 20.28;
+    laser.axis = 12.8;
+
+    laser.cos_pol = 1;
+    laser.sin_pol = 0;
+    
+    sim.emf -> add_laser( laser );
+
+    sim.emf -> save( emf::e, fcomp::x );
+    sim.emf -> save( emf::e, fcomp::y );
+    sim.emf -> save( emf::e, fcomp::z );
+    sim.emf -> save( emf::b, fcomp::x );
+    sim.emf -> save( emf::b, fcomp::y );
+    sim.emf -> save( emf::b, fcomp::z );
+
+
+    // Run simulation
+    float const tmax = 42 ;
+
+    printf("Running EMF boundary condition test up to t = %g...\n", tmax );
+
+    Timer timer;
+
+    timer.start();
+
+    while( sim.get_t() < tmax ) {
+        sim.advance();
+        if ( sim.get_iter() % 100 == 0 ) {
+            sim.emf -> save( emf::e, fcomp::x );
+            sim.emf -> save( emf::e, fcomp::y );
+            sim.emf -> save( emf::e, fcomp::z );
+            sim.emf -> save( emf::b, fcomp::x );
+            sim.emf -> save( emf::b, fcomp::y );
+            sim.emf -> save( emf::b, fcomp::z );
+        };
+    }
+
+    timer.stop();
+
+
+    printf("Simulation complete at t = %g\n", sim.get_t());
+
+
+    printf("Elapsed time was: %.3f s\n", timer.elapsed( timer::s ));
+
+}
+
+
+
 int main() {
 
     // test_emf();
@@ -533,7 +605,9 @@ int main() {
 
     // test_mushroom();
 
-    test_kh();
+    // test_kh();
+
+    test_bcemf();
 
     return 0;
 }

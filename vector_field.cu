@@ -14,12 +14,9 @@ __host__
  * @param nx        Tile grid size
  * @param gc        Number of guard cells
  */
-VectorField::VectorField( uint2 const ntiles, uint2 const nx, uint2 const gc_[2]) :
-    ntiles( ntiles ), nx( nx ), periodic( make_int2(1,1) )
+VectorField::VectorField( uint2 const ntiles, uint2 const nx, bnd<unsigned int> const gc ) :
+    ntiles( ntiles ), nx( nx ), periodic( make_int2(1,1) ), gc( gc )
 {
-    gc[0] = gc_[0];
-    gc[1] = gc_[1];
-
     malloc_dev( d_buffer, buffer_size() );
 }
 
@@ -33,8 +30,7 @@ VectorField::VectorField( uint2 const ntiles, uint2 const nx, uint2 const gc_[2]
 VectorField::VectorField( uint2 const ntiles, uint2 const nx ) :
     ntiles( ntiles ), nx( nx ), periodic( make_int2(1,1) )
 {
-    gc[0] = {0};
-    gc[1] = {0};
+    gc = {0};
 
     malloc_dev( d_buffer, buffer_size() );
 }
@@ -401,11 +397,11 @@ void VectorField::copy_to_gc( ) {
     dim3 grid( ntiles.x, ntiles.y );
 
     _copy_gcx_kernel <<< grid, block >>> (
-        d_buffer, periodic.x, ext, nx, gc[0].x, gc[1].x
+        d_buffer, periodic.x, ext, nx, gc.x.lower, gc.x.upper
     );
 
     _copy_gcy_kernel <<< grid, block >>> (
-        d_buffer, periodic.y, ext, nx, gc[0].y, gc[1].y
+        d_buffer, periodic.y, ext, nx, gc.y.lower, gc.y.upper
     );
 };
 
@@ -550,11 +546,11 @@ void VectorField::add_from_gc( )
     dim3 grid( ntiles.x, ntiles.y );
 
     _add_gcx_kernel <<< grid, block >>> (
-        d_buffer, periodic.x, ext, nx, gc[0].x, gc[1].x
+        d_buffer, periodic.x, ext, nx, gc.x.lower, gc.x.upper
     );
 
     _add_gcy_kernel <<< grid, block >>> (
-        d_buffer, periodic.y, ext, nx, gc[0].y, gc[1].y
+        d_buffer, periodic.y, ext, nx, gc.y.lower, gc.y.upper
     );
 }
 
@@ -605,7 +601,7 @@ __host__
  */
 void VectorField::x_shift_left( unsigned int const shift ) {
 
-    if ( gc[1].x >= shift ) {
+    if ( gc.x.upper >= shift ) {
         uint2 ext = ext_nx();
 
         dim3 block( 64 );
@@ -616,9 +612,9 @@ void VectorField::x_shift_left( unsigned int const shift ) {
         _x_shift_left_kernel<<< grid, block, shm_size >>> ( shift, d_buffer, ext );
 
         // Update x guard cells not changing lower and upper global guard cells
-        _copy_gcx_kernel <<<grid, block>>> ( d_buffer, 0, ext, nx, gc[0].x, gc[1].x );
+        _copy_gcx_kernel <<<grid, block>>> ( d_buffer, 0, ext, nx, gc.x.lower, gc.x.upper );
     } else {
-        std::cerr << "(*error*) VectorField::x_shift_left(), shift value too large, must be <= gc[1].x\n";
+        std::cerr << "(*error*) VectorField::x_shift_left(), shift value too large, must be <= gc.x.upper\n";
         exit(1);
     }
 }
@@ -678,7 +674,7 @@ void _kernel3_x( float const a, float const b, float const c,
  */
 void VectorField::kernel3_x( float const a, float const b, float const c ) {
 
-    if (( gc[0].x > 0) && (gc[1].x > 0)) {
+    if (( gc.x.lower > 0) && (gc.x.upper > 0)) {
 
         uint2 ext = ext_nx();
 
@@ -689,7 +685,7 @@ void VectorField::kernel3_x( float const a, float const b, float const c ) {
 
         _kernel3_x<<< grid, block, shm_size >>> ( a, b, c, d_buffer, nx, ext, offset() );
         
-        _copy_gcx_kernel <<<grid, block>>> ( d_buffer, 0, ext, nx, gc[0].x, gc[1].x );
+        _copy_gcx_kernel <<<grid, block>>> ( d_buffer, 0, ext, nx, gc.x.lower, gc.x.upper );
 
     } else {
         std::cerr << "(*error*) VectorField::kernel_x3() requires at least 1 guard cell at both the lower and upper x boundaries.\n";
@@ -752,7 +748,7 @@ void _kernel3_y( float const a, float const b, float const c,
  */
 void VectorField::kernel3_y( float const a, float const b, float const c ) {
 
-    if (( gc[0].y > 0) && (gc[1].y > 0)) {
+    if (( gc.y.lower > 0) && (gc.y.upper > 0)) {
 
         uint2 ext = ext_nx();
 
@@ -763,7 +759,7 @@ void VectorField::kernel3_y( float const a, float const b, float const c ) {
 
         _kernel3_y<<< grid, block, shm_size >>> ( a, b, c, d_buffer, nx, ext, offset() );
         
-        _copy_gcy_kernel <<<grid, block>>> ( d_buffer, 0, ext, nx, gc[0].y, gc[1].y );
+        _copy_gcy_kernel <<<grid, block>>> ( d_buffer, 0, ext, nx, gc.y.lower, gc.y.upper );
 
     } else {
         std::cerr << "(*error*) VectorField::kernel3_y() requires at least 1 guard cell at both the lower and upper y boundaries.\n";

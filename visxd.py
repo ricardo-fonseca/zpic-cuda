@@ -528,4 +528,4 @@ def plot_vfield2d( fld, iter, xlim = None, ylim = None, grid = False, norm = Non
         if ( not norm ):
             norm = colors.CenteredNorm()
         print("Plotting {} out of plane field for iteration {}.".format(fld,iter))
-        grid2d(filez, xlim = xlim, ylim = ylim, grid = grid, cmap = 'BrBG', norm = colors.CenteredNorm())
+        grid2d(filez, xlim = xlim, ylim = ylim, grid = grid, cmap = 'BrBG', norm = norm )

@@ -43,7 +43,7 @@ EMF::EMF( uint2 const ntiles, uint2 const nx, float2 const box,
     B -> zero();
 
     // Set default boundary conditions to periodic
-    bc = bnd<emf::bc::type> (emf::bc::periodic);
+    bc = emf::bc_type (emf::bc::periodic);
 
     // Reset iteration number
     iter = 0;
@@ -249,55 +249,246 @@ void EMF::advance() {
 
 
 __global__
-void _emf_bcx( const int ntiles_x, emf::bc_type bc ) {
+/**
+ * @brief CUDA kernel for processing EM physical boundaries along x
+ * 
+ * This kernel must be launched with 2 * ntiles.y blocks
+ * 
+ * @param d_E       E field grid
+ * @param d_B       B field grid
+ * @param int_nx    Tile size (internal)
+ * @param ext_nx    Tile size (external)
+ * @param gc        Number of guard cells
+ * @param ntiles_x  Number of tiles along the x direction
+ * @param bc        Type of boundary condition
+ */
+void _emf_bcx( 
+    float3 * const __restrict__ d_E,
+    float3 * const __restrict__ d_B,
+    uint2 const int_nx, uint2 const ext_nx, bnd<unsigned int> gc, 
+    uint2 const ntiles, emf::bc_type bc )
+{
+    const int tid = blockIdx.y * ntiles.x + blockIdx.x * (ntiles.x - 1);
 
-    int tid = blockIdx.y * ntiles_x;
-    if ( blockIdx.x == 1 ) 
+    const int tile_off = tid * ext_nx.x * ext_nx.y;
+    const int ystride = ext_nx.x;
+    const int offset   = gc.x.lower;
+
+    float3 * const __restrict__ E = d_E + tile_off + offset;
+    float3 * const __restrict__ B = d_B + tile_off + offset;
+
 
     // Lower boundary
     if ( blockIdx.x == 0 ) {
         switch( bc.x.lower ) {
         case( emf::bc::pmc) :
-            for( int idx = threadIdx.x; idx < ext_nx.y * gc.lower; idx += blockDim.x ) {
-                E[ -1, j ].x =  E[ 0, j ].x;
-                E[ -1, j ].y =  E[ 1, j ].y;
-                E[ -1, j ].z =  E[ 1, j ].z;
+            for( int idx = threadIdx.x; idx < ext_nx.y; idx += blockDim.x ) {
+                // j includes the y-stride
+                const int j = idx * ystride;
 
-                B[ -1, j ].x =  B[ 1, j ].x;
-                B[ -1, j ].y = -B[ 0, j ].y;
-                B[ -1, j ].z = -B[ 0, j ].z;
+                E[ -1 + j ].x = -E[ 0 + j ].x;
+                E[ -1 + j ].y =  E[ 1 + j ].y;
+                E[ -1 + j ].z =  E[ 1 + j ].z;
+
+                B[ -1 + j ].x =  B[ 1 + j ].x;
+                B[ -1 + j ].y = -B[ 0 + j ].y;
+                B[ -1 + j ].z = -B[ 0 + j ].z;
+
             }
             break;
-        case( emf::bc::pec) :
-        break;
+
+        case( emf::bc::pec ) :
+            for( int idx = threadIdx.x; idx < ext_nx.y; idx += blockDim.x ) {
+                const int j = idx * ystride;
+
+                E[ -1 + j ].x =  E[ 0 + j ].x;
+                E[ -1 + j ].y = -E[ 1 + j ].y;
+                E[ -1 + j ].z = -E[ 1 + j ].z;
+
+                E[  0 + j ].y = 0;
+                E[  0 + j ].z = 0;
+
+                B[ -1 + j ].x = -B[ 1 + j ].x;
+                B[ -1 + j ].y =  B[ 0 + j ].y;
+                B[ -1 + j ].z =  B[ 0 + j ].z;
+
+                B[  0 + j ].x = 0;
+            }
+            break;
         }
     // Upper boundary
     } else {
-        tid += ntiles_x - 1;
+        switch( bc.x.upper ) {
+        case( emf::bc::pmc) :
+            for( int idx = threadIdx.x; idx < ext_nx.y; idx += blockDim.x ) {
+                int j = idx * ystride;
 
+                E[ int_nx.x + j ].x = -E[ int_nx.x-1 + j ].x;
+                //E[ int_nx.x + j ].y =  E[ int_nx.x + j ].y;
+                //E[ int_nx.x + j ].z =  E[ int_nx.x + j ].z;
+
+                E[ int_nx.x+1 + j ].x = -E[ int_nx.x-2 + j ].x;
+                E[ int_nx.x+1 + j ].y =  E[ int_nx.x-1 + j ].y;
+                E[ int_nx.x+1 + j ].z =  E[ int_nx.x-1 + j ].z;
+
+                // B[ int_nx.x + j ].x = -B[ int_nx.x + j ].x;
+                B[ int_nx.x + j ].y = -B[ int_nx.x-1 + j ].y;
+                B[ int_nx.x + j ].z = -B[ int_nx.x-1 + j ].z;
+
+                B[ int_nx.x+1 + j ].x =  B[ int_nx.x-1 + j ].x;
+                B[ int_nx.x+1 + j ].y = -B[ int_nx.x-2 + j ].y;
+                B[ int_nx.x+1 + j ].z = -B[ int_nx.x-2 + j ].z;
+            }
+            break;
+
+        case( emf::bc::pec) :
+            for( int idx = threadIdx.x; idx < ext_nx.y; idx += blockDim.x ) {
+                int j = idx * ystride;
+
+                E[ int_nx.x + j ].x =  E[ int_nx.x-1 + j ].x;
+                E[ int_nx.x + j ].y =  0;
+                E[ int_nx.x + j ].z =  0;
+
+                E[ int_nx.x+1 + j ].x =  E[ int_nx.x-2 + j ].x;
+                E[ int_nx.x+1 + j ].y = -E[ int_nx.x-1 + j ].y;
+                E[ int_nx.x+1 + j ].z = -E[ int_nx.x-1 + j ].z;
+
+                B[ int_nx.x + j ].x =  0;
+                B[ int_nx.x + j ].y =  B[ int_nx.x-1 + j ].y;
+                B[ int_nx.x + j ].z =  B[ int_nx.x-1 + j ].z;
+
+                B[ int_nx.x+1 + j ].x = -B[ int_nx.x-1 + j ].x;
+                B[ int_nx.x+1 + j ].y =  B[ int_nx.x-2 + j ].y;
+                B[ int_nx.x+1 + j ].z =  B[ int_nx.x-2 + j ].z;
+            }
+            break;
+        }
     }
-
 }
 
 __global__
-void _emf_bcy() {
-    
+void _emf_bcy(
+    float3 * const __restrict__ d_E,
+    float3 * const __restrict__ d_B,
+    uint2 const int_nx, uint2 const ext_nx, bnd<unsigned int> gc, 
+    uint2 const ntiles, emf::bc_type bc )
+{
+    const int tid = blockIdx.y * (ntiles.y - 1) * ntiles.x + blockIdx.x;
+
+    const int tile_off = tid * ext_nx.x * ext_nx.y;
+    const int ystride = ext_nx.x;
+    const int offset   = gc.y.lower * ystride;
+
+    float3 * const __restrict__ E = d_E + tile_off + offset;
+    float3 * const __restrict__ B = d_B + tile_off + offset;
+
+
+    // Lower boundary
+    if ( blockIdx.y == 0 ) {
+        switch( bc.y.lower ) {
+        case( emf::bc::pmc) :
+            for( int idx = threadIdx.x; idx < ext_nx.x; idx += blockDim.x ) {
+                int i = idx;
+
+                E[ i - ystride ].x =  E[ i + ystride ].x;
+                E[ i - ystride ].y = -E[ i +       0 ].y;
+                E[ i - ystride ].z =  E[ i + ystride ].z;
+
+                B[ i - ystride ].x = -B[ i +       0 ].x;
+                B[ i - ystride ].y =  B[ i + ystride ].y;
+                B[ i - ystride ].z = -B[ i +       0 ].z;
+            }
+            break;
+
+        case( emf::bc::pec ) :
+            for( int idx = threadIdx.x; idx < ext_nx.x; idx += blockDim.x ) {
+                int i = idx;
+
+                E[ i - ystride ].x = -E[ i + ystride ].x;
+                E[ i - ystride ].y =  E[ i +       0 ].y;
+                E[ i - ystride ].z = -E[ i + ystride ].z;
+
+                E[ i +       0 ].x = 0;
+                E[ i +       0 ].z = 0;
+                
+                B[ i - ystride ].x =  B[ i +       0 ].x;
+                B[ i - ystride ].y = -B[ i + ystride ].y;
+                B[ i - ystride ].z =  B[ i +       0 ].z;
+
+                B[ i +       0 ].y = 0;
+            }
+            break;
+        }
+    // Upper boundary
+    } else {
+        switch( bc.y.upper ) {
+        case( emf::bc::pmc) :
+            for( int idx = threadIdx.x; idx < ext_nx.x; idx += blockDim.x ) {
+                int i = idx;
+
+                E[ i + int_nx.y * ystride ].y = -E[ i + (int_nx.y-1) * ystride ].y;
+
+                E[ i + (int_nx.y+1) * ystride ].x =  E[ i + (int_nx.y-1) * ystride ].x;
+                E[ i + (int_nx.y+1) * ystride ].y = -E[ i + (int_nx.y-2) * ystride ].y;
+                E[ i + (int_nx.y+1) * ystride ].z =  E[ i + (int_nx.y-1) * ystride ].z;
+
+                B[ i + (int_nx.y) * ystride ].x = -B[ i + (int_nx.y-1)*ystride ].x;
+                B[ i + (int_nx.y) * ystride ].z = -B[ i + (int_nx.y-1)*ystride ].z;
+
+                B[ i + (int_nx.y+1) * ystride ].x = -B[ i + (int_nx.x-2) * ystride ].x;
+                B[ i + (int_nx.y+1) * ystride ].y =  B[ i + (int_nx.x-1) * ystride ].y;
+                B[ i + (int_nx.y+1) * ystride ].z = -B[ i + (int_nx.x-2) * ystride ].z;
+            }
+            break;
+
+        case( emf::bc::pec) :
+            for( int idx = threadIdx.x; idx < ext_nx.x; idx += blockDim.x ) {
+                int i = idx;
+
+                E[ i + (int_nx.y)*ystride ].x =  0;
+                E[ i + (int_nx.y)*ystride ].y =  E[ i + (int_nx.y-1)*ystride ].y;
+                E[ i + (int_nx.y)*ystride ].z =  0;
+
+                E[ i + (int_nx.y+1)*ystride ].x = -E[ i + (int_nx.x-1) * ystride ].x;
+                E[ i + (int_nx.y+1)*ystride ].y =  E[ i + (int_nx.x-2) * ystride ].y;
+                E[ i + (int_nx.y+1)*ystride ].z = -E[ i + (int_nx.x-1) * ystride ].z;
+
+                B[ i + (int_nx.y)*ystride ].x =  B[ i + (int_nx.y-1) * ystride ].x;
+                B[ i + (int_nx.y)*ystride ].y =  0;
+                B[ i + (int_nx.y)*ystride ].z =  B[ i + (int_nx.y-1) * ystride ].z;
+
+
+                B[ i + (int_nx.y+1) * ystride ].x =  B[ i + (int_nx.y-2) * ystride ].x;
+                B[ i + (int_nx.y+1) * ystride ].y = -B[ i + (int_nx.y-1) * ystride ].y;
+                B[ i + (int_nx.y+1) * ystride ].z =  B[ i + (int_nx.y-2) * ystride ].z;
+            }
+            break;
+        }
+    }
 }
 
 
 __host__
+/**
+ * @brief Processes "physical" boundary conditions
+ * 
+ */
 void EMF::process_bc() {
 
     dim3 block( 64 );
 
+    // x boundaries
     if ( bc.x.lower > emf::bc::periodic || bc.x.upper > emf::bc::periodic ) {
         dim3 grid( 2, E->ntiles.y );
-        _emf_bcx <<< grid, block >>> ();
+        _emf_bcx <<< grid, block >>> ( E -> d_buffer, B -> d_buffer, 
+            E -> nx, E -> ext_nx(), E -> gc, E -> ntiles, bc );
     }
 
+    // y boundaries
     if ( bc.y.lower > emf::bc::periodic || bc.y.upper > emf::bc::periodic ) {
         dim3 grid( E->ntiles.x, 2 );
-        _emf_bcy <<< grid, block >>> ();
+        _emf_bcy <<< grid, block >>> ( E -> d_buffer, B -> d_buffer, 
+            E -> nx, E -> ext_nx(), E -> gc, E -> ntiles, bc );;
     }
 
 }

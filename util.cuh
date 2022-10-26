@@ -29,7 +29,7 @@ class bnd {
         T upper;
     } y;
 
-    bnd() : x({0,0}), y({0,0}) {};
+    bnd() : x({static_cast<T>(0)}), y({static_cast<T>(0)}) {};
     bnd( T val ) : x({val,val}), y({val,val}) {};
 };
 
@@ -71,7 +71,7 @@ class bnd {
     auto err_sync = cudaPeekAtLastError(); \
     auto err_async = cudaDeviceSynchronize(); \
     if (( err_sync != cudaSuccess ) || ( err_async != cudaSuccess )) { \
-        std::cerr << "(*error*) CUDA device is on error state at " << __func__ << "()\n"; \
+        std::cerr << "(*error*) CUDA device is on error state at " << __func__ << "()"; \
         std::cerr << " (" << __FILE__ << ":" << __LINE__ << ")\n"; \
         if ( err_sync != cudaSuccess ) \
             std::cerr << "(*error*) Sync. error message: " << cudaGetErrorString(err_sync) << " (" << err_sync << ") \n"; \

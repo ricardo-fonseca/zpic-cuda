@@ -6,12 +6,13 @@
 #include "current.cuh"
 #include "util.cuh"
 #include "moving_window.cuh"
+#include "string.h"
 
 namespace emf {
     enum field  { e, b };
 
     namespace bc {
-        enum type { none, periodic, pec, pmc };
+        enum type { none = 0, periodic, pec, pmc };
     }
 
     typedef bnd<bc::type> bc_type;
@@ -104,6 +105,12 @@ class EMF {
 
         // Store new values
         bc = new_bc;
+
+
+        std::string bc_name[] = {"none", "periodic", "pec", "pmc"};
+        std::cout << "(*info*) EMF boundary conditions\n";
+        std::cout << "(*info*) x : [ " << bc_name[ bc.x.lower ] << ", " << bc_name[ bc.x.upper ] << " ]\n";
+        std::cout << "(*info*) y : [ " << bc_name[ bc.y.lower ] << ", " << bc_name[ bc.y.upper ] << " ]\n";
 
         // Set periodic flags on tile grids
         E->periodic.x = B->periodic.x = ( bc.x.lower == emf::bc::periodic );
