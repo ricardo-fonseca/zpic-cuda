@@ -6,33 +6,89 @@
 #include "moving_window.cuh"
 #include "filter.cuh"
 
+namespace current {
+    namespace bc {
+        enum type { none = 0, periodic, reflecting };
+    }
+    typedef bnd<bc::type> bc_type;
+}
+
 class Current {
 
-    // Simulation box info
+    /// @brief Simulation box size
     float2 box;
-    float2 dx;
 
-    // Time step
+    /// @brief cell size
+    float2 dx;
+    
+    /// @brief time step
     float dt;
 
-    // Moving window information
+    /// @brief Moving window information
     MovingWindow moving_window;
+
+    /// @brief Boundary condition
+    current::bc_type bc;
+
+    /// @brief Iteration number
+    int iter;
+
+    __host__
+    /**
+     * @brief Process boundary conditions
+     * 
+     */
+    void process_bc();
 
     public:
 
-    // Current density
+    /// @brief Current density
     VectorField * J;
 
-    // Filtering parameters
+    /// @brief Filtering parameters
     Filter::Digital *filter;
-
-    // Iteration number
-    int iter;
 
     __host__ Current( uint2 const ntiles, uint2 const nx, float2 const box, float const dt );
     __host__ ~Current() {
         delete (J);
         delete (filter);
+    }
+
+    __host__
+    current::bc_type get_bc( ) { return bc; }
+
+    __host__
+    void set_bc( current::bc_type new_bc ) {
+
+        // Validate parameters
+        if ( (new_bc.x.lower == current::bc::periodic) || (new_bc.x.upper == current::bc::periodic) ) {
+            if ( new_bc.x.lower != new_bc.x.upper ) {
+                std::cerr << "(*error*) Current boundary type mismatch along x.\n";
+                std::cerr << "(*error*) When choosing periodic boundaries both lower and upper types must be set to current::bc::periodic.\n";
+                exit(1);
+            }
+        }
+
+        if ( (new_bc.y.lower == current::bc::periodic) || (new_bc.y.upper == current::bc::periodic) ) {
+            if ( new_bc.y.lower != new_bc.y.upper ) {
+                std::cerr << "(*error*) Current boundary type mismatch along y.\n";
+                std::cerr << "(*error*) When choosing periodic boundaries both lower and upper types must be set to emf::bc::periodic.\n";
+                exit(1);
+            }
+        }
+
+        // Store new values
+        bc = new_bc;
+
+
+        std::string bc_name[] = {"none", "periodic", "reflecting"};
+        std::cout << "(*info*) Current boundary conditions\n";
+        std::cout << "(*info*) x : [ " << bc_name[ bc.x.lower ] << ", " << bc_name[ bc.x.upper ] << " ]\n";
+        std::cout << "(*info*) y : [ " << bc_name[ bc.y.lower ] << ", " << bc_name[ bc.y.upper ] << " ]\n";
+
+        // Set periodic flags on tile grids
+        J->periodic.x = ( bc.x.lower == current::bc::periodic );
+        J->periodic.y = ( bc.y.lower == current::bc::periodic );
     }
 
     __host__
@@ -46,7 +102,10 @@ class Current {
     int set_moving_window() { 
         if ( iter == 0 ) {
             moving_window.init( dx.x );
+
+            bc.x.lower = bc.x.upper = current::bc::none;
             J->periodic.x = false;
+
             return 0;
         } else {
             std::cerr << "(*error*) set_moving_window() called with iter != 0\n";

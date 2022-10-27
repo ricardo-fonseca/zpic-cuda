@@ -237,3 +237,29 @@ Launches a Gaussian beam. The beam parameters are the same as the plane wave par
 * `W0` - Gaussian beam waist (in simulation units)
 * `focus` - Focal plane position along the x direction (in simulation units). Can be set outside the simulation box
 * `axis` - y position of the propagation axis (in simulation units)
+
+## Boundary conditions
+
+Each simulation object (`sim.emf`, `sim.current` and `sim.species[i]`) has specific boundary condition options. Available options are:
+
+* EM Fields
+  * `emf::bc::none` - Edge grid cells are not processed
+  * `emf::bc::periodic` - Periodic boundary conditions
+  * `emf::bc::pmc` - Perfect magnetic conductor (reflecting)
+  * `emf::bc::pec` - Perfect electric conductor (electric)
+* Currents
+  * `current::bc::none` - Edge grid cells are not processed
+  * `current::bc::periodic` - Periodic boundary conditions
+  * `current::bc::reflecting` - Reflecting boundary conditions (current deposited outside the simulation domain is folded into the box)
+* Species
+  * `species::bc::open` - Particles leaving the simulation box are absorbed
+  * `species::bc::periodic` - Periodic boundary conditions
+
+By default, all simulation objects are initialized to periodic boundary conditions. Setting a moving window will enforce `none` boundary conditions (`open` for species) for along the `x` direction for simulation objects. Specific types of boundary conditions can be set using the `*::set_bc( new_bc )` method.
+
+## Utilities (`util.cuh`)
+
+* `deviceCheck()`
+  * Checks if there are any synchronous or asynchronous errors from CUDA calls. If any errors are found the routine will print out the error messages and exit the program
+* `malloc_host( buffer, size )`
+  * Allocates page-locked memory on the host. In case of failure the routine will isse an error and abort.

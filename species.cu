@@ -74,11 +74,14 @@ Species::Species( std::string const name, float const m_q,
     particles = new Particles( ntiles, nx, np_max );
     tmp = new Particles( ntiles, nx, np_max );
 
+    // Set default boundary conditions to periodic
+    bc = species::bc_type (species::bc::periodic);
+
     // Reset iteration numbers
     iter = 0;
 
     // Default pusher type
-    push_type = pusher::boris;
+    push_type = species::boris;
 
     // Initialize energy diagnostic
     malloc_dev( d_energy, 1 );
@@ -144,6 +147,12 @@ void Species::move_window_shift() {
     }
 }
 
+/**
+ * @brief Move simulation window - inject particles
+ * 
+ * When using a moving simulation window, injects particles at the leading edge
+ * if necessary.
+ */
 void Species::move_window_inject() {
 
     if ( moving_window.needs_inject ) {
@@ -159,11 +168,132 @@ void Species::move_window_inject() {
     }
 }
 
+
+__global__
+void _species_bcx(    
+    t_part_tile const * const __restrict__ d_tiles,
+    int2* __restrict__ d_ix, float2* __restrict__ d_x, float3* __restrict__ d_u,
+    int const nx, uint2 const ntiles, species::bc_type bc ) 
+{
+    const int tid = blockIdx.y * ntiles.x + blockIdx.x * (ntiles.x - 1);
+
+    const int part_offset    = d_tiles[ tid ].pos;
+    const int np             = d_tiles[ tid ].n;
+    int2   __restrict__ *ix  = &d_ix[ part_offset ];
+    float2 __restrict__ *x   = &d_x[ part_offset ];
+    float3 __restrict__ *u   = &d_u[ part_offset ];
+
+    if ( blockIdx.x == 0 ) {
+        // Lower boundary
+        switch( bc.x.lower ) {
+        case( species::bc::reflecting ) :
+            for( int i = threadIdx.x; i < np; i+= blockDim.x ) {
+                if( ix[i].x < 0 ) {
+                    ix[i].x += 1;
+                    x[i].x = -x[i].x;
+                    u[i].x = -u[i].x;
+                }
+            }
+            break;
+        }
+    } else {
+        // Upper boundary
+        switch( bc.x.upper ) {
+        case( species::bc::reflecting ) :
+            for( int i = threadIdx.x; i < np; i+= blockDim.x ) {
+                if( ix[i].x >=  nx ) {
+                    ix[i].x -= 1;
+                    x[i].x = -x[i].x;
+                    u[i].x = -u[i].x;
+                }
+            }
+            break;
+        }
+    }
+
+}
+
+__global__
+void _species_bcy(    t_part_tile const * const __restrict__ d_tiles,
+    int2* __restrict__ d_ix, float2* __restrict__ d_x, float3* __restrict__ d_u,
+    int const ny, uint2 const ntiles, species::bc_type bc ) 
+{
+    const int tid = blockIdx.y * (ntiles.y - 1) * ntiles.x + blockIdx.x;
+
+    const int part_offset    = d_tiles[ tid ].pos;
+    const int np             = d_tiles[ tid ].n;
+    int2   __restrict__ *ix  = &d_ix[ part_offset ];
+    float2 __restrict__ *x   = &d_x[ part_offset ];
+    float3 __restrict__ *u   = &d_u[ part_offset ];
+
+    if ( blockIdx.y == 0 ) {
+        // Lower boundary
+        switch( bc.y.lower ) {
+        case( species::bc::reflecting ) :
+            for( int i = threadIdx.x; i < np; i+= blockDim.x ) {
+                if( ix[i].y < 0 ) {
+                    ix[i].y += 1;
+                    x[i].y = -x[i].y;
+                    u[i].y = -u[i].y;
+                }
+            }
+            break;
+        }
+    } else {
+        // Upper boundary
+        switch( bc.y.upper ) {
+        case( species::bc::reflecting ) :
+            for( int i = threadIdx.x; i < np; i+= blockDim.x ) {
+                if( ix[i].y >=  ny ) {
+                    ix[i].y -= 1;
+                    x[i].y = -x[i].y;
+                    u[i].y = -u[i].y;
+                }
+            }
+            break;
+        }
+    }
+}
+
+__host__
 /**
- * @brief 
+ * @brief Processes "physical" boundary conditions
  * 
- * @param emf 
- * @param current 
+ */
+void Species::process_bc() {
+
+    dim3 block( 1024 );
+
+    // x boundaries
+    if ( bc.x.lower > species::bc::periodic || bc.x.upper > species::bc::periodic ) {
+        dim3 grid( 2, particles->ntiles.y );
+        _species_bcx <<< grid, block >>> ( particles -> tiles,
+            particles -> ix, particles -> x, particles -> u,
+            particles -> nx.x, particles -> ntiles, bc );
+    }
+
+    // y boundaries
+    if ( bc.y.lower > species::bc::periodic || bc.y.upper > species::bc::periodic ) {
+        dim3 grid( particles->ntiles.x, 2 );
+        _species_bcy <<< grid, block >>> ( particles -> tiles,
+            particles -> ix, particles -> x, particles -> u,
+            particles -> nx.y, particles -> ntiles, bc );
+    }
+
+}
+
+/**
+ * @brief Advance particles 1 iteration
+ * 
+ * This routine will:
+ * 1. Advance momenta
+ * 2. Advance positions and deposit current
+ * 3. Process boundary conditions
+ * 4. Handle moving window algorith,
+ * 5. Sort particles according to tiles
+ * 
+ * @param emf       EM fields
+ * @param current   Electric durrent density
  */
 void Species::advance( EMF const &emf, Current &current ) {
 
@@ -172,6 +302,9 @@ void Species::advance( EMF const &emf, Current &current ) {
 
     // Advance positions and deposit current
     move( current.J );
+
+    // Process physical boundary conditions
+    process_bc();
 
     // Increase internal iteration number
     iter++;
@@ -805,7 +938,7 @@ void interpolate_fld(
  * @param ext_nx        E,B tile grid external size
  * @param alpha         Force normalization ( 0.5 * q / m * dt )
  */
-template < pusher::type type >
+template < species::pusher type >
 __global__
 void _push_kernel ( 
     t_part_tile const * const __restrict__ d_tiles,
@@ -854,8 +987,8 @@ void _push_kernel (
         // Advance momentum
         float3 pu = u[i];
         
-        if ( type == pusher::boris ) u[i] = dudt_boris( alpha, e, b, pu, energy );
-        if ( type == pusher::euler ) u[i] = dudt_boris_euler( alpha, e, b, pu, energy );
+        if ( type == species::boris ) u[i] = dudt_boris( alpha, e, b, pu, energy );
+        if ( type == species::euler ) u[i] = dudt_boris_euler( alpha, e, b, pu, energy );
     }
 
     // Add up energy from all warps    
@@ -893,16 +1026,16 @@ void Species::push( VectorField * const E, VectorField * const B )
     device::zero(d_energy,1);
 
     switch( push_type ) {
-    case( pusher :: euler ):
-        _push_kernel <pusher::euler> <<< grid, block, shm_size >>> (
+    case( species :: euler ):
+        _push_kernel <species::euler> <<< grid, block, shm_size >>> (
             particles -> tiles, 
             particles -> ix, particles -> x, particles -> u,
             E -> d_buffer, B -> d_buffer, E -> offset(), ext_nx, alpha,
             d_energy
         );
         break;
-    case( pusher :: boris ):
-        _push_kernel <pusher::boris> <<< grid, block, shm_size >>> (
+    case( species :: boris ):
+        _push_kernel <species::boris> <<< grid, block, shm_size >>> (
             particles -> tiles, 
             particles -> ix, particles -> x, particles -> u,
             E -> d_buffer, B -> d_buffer, E -> offset(), ext_nx, alpha,

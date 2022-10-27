@@ -2,14 +2,19 @@
 
 ## TO-DO
 
-* Refelecting boundaries for currents
-* Reflecting and thermal boundaries for particles
+* Thermal boundaries for particles
+* Wall injection for particles
 * Improve particle tile sorter, make it production ready
+
+## 2022.10.27
+
+* Reflecting boundaries for currents
+* Reflecting boundaries for particles
 
 ## 2022.10.26
 
 * PEC and PMC boundaries for EM fields
-* Use bnd<T> type for boundary related information (number of guard cells, bc type)
+* Use `bnd<T>` type for boundary-related information (number of guard cells, bc type)
 
 ## 2022.10.19
 
@@ -22,7 +27,7 @@
 __CRITICAL:__ Fixes critical issues
 
 * Fixes critical issue in Field and VectorField `::add_from_gc()` method.
-  * Adding in values from upper neighbour was not done properly.
+  * Adding in values from an upper neighbor was not done properly.
 * Fixes critical issue with `pusher::euler`, rotation matrix was not properly implemented
 
 * Adds Courant condition checking to EMF class
@@ -44,24 +49,24 @@ __CRITICAL:__ Fixes critical issues
   * Defaults to `pusher::boris` (the traditional Boris push)
 * Fixes issue with particle tile sort with periodic boundaries
 * Implements `UDistribution::*` classes to handle temperature distributions:
-  * Implements `None` (0), `Cold` (ufl only), and `Thermal` (uth, ufl)
-  * Also implements `ThermalCorr` that includes a correction for local ufl fluctuations due to low number of particles per cell
+  * Implements `None` (0), `Cold` (`ufl` only), and `Thermal` (`uth`, `ufl`)
+  * Also implements `ThermalCorr` which includes a correction for local `ufl` fluctuations due to a low number of particles per cell
 * Laser pulse filtering can now be controlled by the `laser.filter` parameter.
-  * This defaults to 1, which corresponds to a 1 level compensated binomial filter. Setting it to 0 disables filtering.
+  * This defaults to 1, which corresponds to a 1-level compensated binomial filter. Setting it to 0 disables filtering.
 
 ## 2022.9.3
 
 * Adds electric current filtering (along x only)
-  * Filtering parameters defined by `Filter::` classes: `Filter::None`, `Filter::Binomial` and `Filter::Compensated`
-  * Controled by `Current::set_filter()` method. Can be changed over the course of the simulation
+  * Filtering parameters defined by `Filter::` classes: `Filter::None`, `Filter::Binomial`, and `Filter::Compensated`
+  * Controlled by `Current::set_filter()` method. Can be changed throughout the simulation
 * Moves laser pulses into `Laser::` namespace, e.g. `Laser::Gaussian`
 * Lasers pulses are now filtered with `Filter::Compensated(1)` before injection
-* Fixes inconsistency in phasespace units (ux, uy, and uz units are now "c")
+* Fixes inconsistency in phase-space units (`ux`, `uy`, and `uz` units are now "c")
 * Adds `visxd.grid2d_fft()` routine to plot the FFT of 2D grid data
 
 ## 2022.9.2
 
-__MILESTONE:__ The code has successfully completed the LWFA simulation test.
+__MILESTONE:__ The code has completed the LWFA simulation test.
 
 * Implements moving window algorithm
 * New MovingWindow class
@@ -71,7 +76,7 @@ __MILESTONE:__ The code has successfully completed the LWFA simulation test.
   * Handles particle injection
 * Particles class
   * Adds `cell_shift` method to shift particle cells by a specified amount
-  * Adds `periodic` member to control `tile_sort()` behaviour (global periodic boundaries were previously enforced)
+  * Adds `periodic` member to control `tile_sort`()` behavior (global periodic boundaries were previously enforced)
 * Field and VectorField classes
   * Adds `x_shift_left` method to shift data left by a specified amount
   * Adds `periodic` member to control `copy_to_gc()` and `add_from_gc()` method behaviour (global periodic boundaries were previously enforced)

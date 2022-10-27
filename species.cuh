@@ -24,10 +24,6 @@
 #include "moving_window.cuh"
 #include "udist.cuh"
 
-namespace pusher {
-    enum type { boris, euler };
-}
-
 namespace phasespace {
     enum quant { x, y, ux, uy, uz };
 
@@ -50,6 +46,15 @@ namespace phasespace {
             break;
         }
     }
+}
+
+namespace species {
+    enum pusher { boris, euler };
+    namespace bc {
+        enum type { open = 0, periodic, reflecting };
+    }
+    typedef bnd<bc::type> bc_type;
+
 }
 
 /**
@@ -79,6 +84,16 @@ private:
 
     // Time step
     float dt;
+
+    /// @brief Boundary condition
+    species::bc_type bc;
+
+    __host__
+    /**
+     * @brief Process boundary conditions
+     * 
+     */
+    void process_bc();
 
     // Moving window information
     MovingWindow moving_window;
@@ -111,7 +126,7 @@ public:
     // Particle data buffer
     Particles *particles;
 
-    pusher::type push_type;
+    species::pusher push_type;
 
     __host__
     Species( std::string const name, float const m_q, 
@@ -121,6 +136,43 @@ public:
     
     __host__
     ~Species();
+
+    __host__
+    species::bc_type get_bc( ) { return bc; }
+
+    __host__
+    void set_bc( species::bc_type new_bc ) {
+
+        // Validate parameters
+        if ( (new_bc.x.lower == species::bc::periodic) || (new_bc.x.upper == species::bc::periodic) ) {
+            if ( new_bc.x.lower != new_bc.x.upper ) {
+                std::cerr << "(*error*) Species boundary type mismatch along x.\n";
+                std::cerr << "(*error*) When choosing periodic boundaries both lower and upper types must be set to species::bc::periodic.\n";
+                exit(1);
+            }
+        }
+
+        if ( (new_bc.y.lower == species::bc::periodic) || (new_bc.y.upper == species::bc::periodic) ) {
+            if ( new_bc.y.lower != new_bc.y.upper ) {
+                std::cerr << "(*error*) Species boundary type mismatch along y.\n";
+                std::cerr << "(*error*) When choosing periodic boundaries both lower and upper types must be set to species::bc::periodic.\n";
+                exit(1);
+            }
+        }
+
+        // Store new values
+        bc = new_bc;
+
+
+        std::string bc_name[] = {"open", "periodic", "reflecting"};
+        std::cout << "(*info*) Species " << name << " boundary conditions\n";
+        std::cout << "(*info*) x : [ " << bc_name[ bc.x.lower ] << ", " << bc_name[ bc.x.upper ] << " ]\n";
+        std::cout << "(*info*) y : [ " << bc_name[ bc.y.lower ] << ", " << bc_name[ bc.y.upper ] << " ]\n";
+
+        // Set periodic flags on tile grids
+        particles->periodic.x = ( bc.x.lower == species::bc::periodic );
+        particles->periodic.y = ( bc.y.lower == species::bc::periodic );
+    }
 
     __host__
     /**
@@ -133,6 +185,8 @@ public:
     int set_moving_window() { 
         if ( iter == 0 ) {
             moving_window.init( dx.x );
+
+            bc.x.lower = bc.x.upper = species::bc::open;
             particles->periodic.x = false;
             return 0;
         } else {

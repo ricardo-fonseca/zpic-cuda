@@ -559,7 +559,6 @@ void test_bcemf() {
     // Run simulation
     float const tmax = 42 ;
 
-    printf("Running EMF boundary condition test up to t = %g...\n", tmax );
 
     Timer timer;
 
@@ -587,7 +586,58 @@ void test_bcemf() {
 
 }
 
+void test_bcspec() {
+    
+    
+    uint2 ntiles = {16, 16};
+    uint2 nx = {16,16};
 
+    float2 box = {25.6, 25.6};
+    float dt = 0.07;
+
+    Simulation sim( ntiles, nx, box, dt );
+
+
+    sim.add_species( "electrons", -1.0f, 
+        make_uint2( 8, 8 ), // ppc
+        Density::Sphere( 1.0, make_float2(12.8,12.8), 6.4 ),
+        UDistribution::Cold( make_float3( -1.0e8, 0, 0 ) )
+    );
+
+    auto bc = sim.species[0] -> get_bc();
+    bc.x = { 
+        .lower = species::bc::reflecting,
+        .upper = species::bc::reflecting
+    };
+    sim.species[0] -> set_bc( bc );
+
+    sim.species[0] -> save_charge();
+    sim.current -> save( fcomp::x );
+    sim.emf -> save( emf::e, fcomp::x );
+
+    float const tmax = 51.2 ;
+
+    printf("Running Species boundary condition test up to t = %g...\n", tmax );
+
+    Timer timer;
+    timer.start();
+
+    while( sim.get_t() < tmax ) {
+
+        sim.advance();
+        if ( sim.get_iter() % 50 == 0 ) {
+            sim.species[0] -> save_charge();
+            sim.current -> save( fcomp::x );
+            sim.emf -> save( emf::e, fcomp::x );
+        }
+    }
+
+    printf("Simulation complete at t = %g\n", sim.get_t());
+
+    timer.stop();
+
+    printf("Elapsed time: %.3f ms\n", timer.elapsed());
+}
 
 int main() {
 
@@ -607,7 +657,9 @@ int main() {
 
     // test_kh();
 
-    test_bcemf();
+    // test_bcemf();
+
+    test_bcspec();
 
     return 0;
 }

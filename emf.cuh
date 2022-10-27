@@ -129,11 +129,8 @@ class EMF {
         if ( iter == 0 ) {
             moving_window.init( dx.x );
 
-            E->periodic.x = false;
-            B->periodic.x = false;
-
-            bc.x.lower = emf::bc::none;
-            bc.x.upper = emf::bc::none;
+            bc.x.lower = bc.x.upper = emf::bc::none;
+            E->periodic.x = B->periodic.x = false;
 
             return 0;
         } else {
