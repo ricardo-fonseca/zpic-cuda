@@ -660,18 +660,20 @@ void test_cathode() {
         +1.0f, make_uint2( 4,4 ), n0, 
         box, ntiles, nx, dt );
     
-    cathode.start = -12.8;
+    cathode.start = -6.4;
     cathode.uth = uth;
 
-    sim.add_species( &cathode );
-
-    auto bc = sim.species[0] -> get_bc();
+    auto bc = cathode.get_bc();
     bc.x = { 
         .lower = species::bc::open,
         .upper = species::bc::open
     };
-    sim.species[0] -> set_bc( bc );
-    
+    cathode.set_bc( bc );
+
+    sim.add_species( &cathode );
+    cathode.inject();
+
+
     sim.species[0] -> save_charge();
     sim.species[0] -> save();
     sim.current -> save( fcomp::x );

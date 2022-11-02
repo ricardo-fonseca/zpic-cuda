@@ -105,11 +105,27 @@ void Cathode::inject() {
 void Cathode::inject( bnd<unsigned int> range ) {
 
     if ( iter == 0 && start < 0 ) {
-        float pos = -vel * start;
-        auto cathode_density = Density::Slab( coord::x, 1.0f, 0.0f, pos );
+        float x0, x1, u;
+        
+        switch (wall)
+        {
+        case edge::lower:
+            x0 = 0;
+            x1 = -vel * start;
+            u = ufl;
+            break;
+        
+        case edge::upper:
+            x0 = box.x + vel * start;
+            x1 = box.x;
+            u = - ufl;
+            break;
+        }
+        
+        auto cathode_density = Density::Slab( coord::x, 1.0f, x0, x1 );
 
         cathode_density.inject( particles, ppc, dx, make_float2(0,0), range );
-        auto udist = UDistribution::Thermal( uth, make_float3( ufl, 0, 0 ) );
+        auto udist = UDistribution::Thermal( uth, make_float3( u, 0, 0 ) );
         set_udist( udist, 0 );
     }
 }

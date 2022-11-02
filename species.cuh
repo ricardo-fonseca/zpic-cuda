@@ -67,11 +67,14 @@ protected:
     uint2 ppc;
 
     float n0;
-
+    
     float2 dx;
 
-    // Time step
+    /// @brief Time step
     float dt;
+
+    /// @brief Cell and simulation box size
+    float2 box;
 
 private:
 
@@ -85,9 +88,6 @@ private:
 
     // Mass over charge ratio
     float m_q;
-
-    // Cell and simulation box size
-    float2 box;
 
     /// @brief Boundary condition
     species::bc_type bc;
