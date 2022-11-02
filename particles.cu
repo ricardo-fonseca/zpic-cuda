@@ -331,7 +331,7 @@ void Particles::save( zdf::part_info &info, zdf::iteration &iter, std::string pa
  * @param tmp_d_tiles   Tile information (temp buffer)
  * @param tmp_d_ix      Particle cells (temp buffer)
  * @param tmp_d_x       Particle positions (temp buffer)
- * @param tmp_d_u       Particle momenta (temp buffer)
+ * @param tmp_d_u       Particle generalized velocity (temp buffer)
  */
 template < coord::cart dir >
 __global__
@@ -389,10 +389,16 @@ void _bnd_out( int const lim,
 
     block.sync();
 
+    // Number of particles leaving the lower boundary
     n1 = _n1;
+
+    // Number of particles leaving the upper boundary
     n2 = _n2;
 
+    // Number of particles leaving both boundaries
     unsigned int const nmove = n2 + n1;
+
+    // Number of particles staying
     unsigned int const n0 = size - nmove;
 
     __shared__ unsigned int _k0;
@@ -437,10 +443,10 @@ void _bnd_out( int const lim,
         }
     }
 
-    block.sync();
-
     __shared__ unsigned int _k;
     _k = nmove;
+
+    block.sync();
 
     // Fill holes left behind
     {

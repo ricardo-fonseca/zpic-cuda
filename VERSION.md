@@ -3,8 +3,19 @@
 ## TO-DO
 
 * Thermal boundaries for particles
-* Wall injection for particles
 * Improve particle tile sorter, make it production ready
+
+## 2022.11.2
+
+__CRITICAL:__ Fixes critical issues
+
+* Fixes critical issue in particle tile sorter (`_bnd_out()`)
+  * A shared variable was being initialized after synchronization, randomly 
+    leading to corrupted particle positions i
+* Adds Wall injection for particles
+* Adds `Density::None` class
+* Adds `edge::pos` (lower, upper) constants
+
 
 ## 2022.10.27
 

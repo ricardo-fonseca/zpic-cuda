@@ -16,6 +16,10 @@ namespace coord {
     enum cart  { x = 0, y };
 }
 
+namespace edge {
+    enum pos { lower = 0, upper };
+}
+
 template < typename T >
 class bnd {
     public:

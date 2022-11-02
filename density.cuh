@@ -24,6 +24,25 @@ namespace Density {
     };
 
     /**
+     * @brief Zero density (no particles), used to disable injection
+     * 
+     */
+    class None : public Profile {
+
+        public:
+
+        None( float const n0) : Profile( n0 ) { };
+
+        None * clone() const override {
+            return new None( n0 );
+        };
+        void inject( Particles * part, uint2 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range ) const override {
+            // no injection
+        };
+    };
+
+
+    /**
      * @brief Uniform plasma density
      * 
      */

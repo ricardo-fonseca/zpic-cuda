@@ -63,11 +63,18 @@ namespace species {
  */
 class Species {
 
-private:
-
+protected:
     uint2 ppc;
 
     float n0;
+
+    float2 dx;
+
+    // Time step
+    float dt;
+
+private:
+
 
     Density::Profile * density;
 
@@ -80,10 +87,7 @@ private:
     float m_q;
 
     // Cell and simulation box size
-    float2 dx, box;
-
-    // Time step
-    float dt;
+    float2 box;
 
     /// @brief Boundary condition
     species::bc_type bc;
@@ -182,7 +186,7 @@ public:
      * 
      * @return int  0 on success, -1 on error
      */
-    int set_moving_window() { 
+    virtual int set_moving_window() { 
         if ( iter == 0 ) {
             moving_window.init( dx.x );
 
@@ -196,14 +200,15 @@ public:
     }
 
     __host__
-    void inject();
-    void inject( bnd<unsigned int> range );
+    virtual void inject();
+    __host__
+    virtual void inject( bnd<unsigned int> range );
 
     __host__
     void set_udist( UDistribution::Type const & udist, unsigned int seed ) { udist.set(*particles, seed );};
 
     __host__
-    void advance( EMF const &emf, Current &current );
+    virtual void advance( EMF const &emf, Current &current );
 
     __host__
     void deposit_charge( Field &charge ) const;

@@ -19,9 +19,9 @@ inline __device__
  * assuming a 2D grid and a 1D block. This can (should) be made more
  * general.
  * 
- * @param seed 
- * @param state 
- * @param norm 
+ * @param seed      Seed value
+ * @param state     PRNG state variable
+ * @param norm      Normal distribution previous value
  */
 void rand_init( const uint2 seed, uint2 & state, double & norm ) {
 

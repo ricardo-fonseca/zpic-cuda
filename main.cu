@@ -5,6 +5,7 @@
 #include "emf.cuh"
 #include "species.cuh"
 #include "current.cuh"
+#include "cathode.cuh"
 
 #include "simulation.cuh"
 
@@ -639,6 +640,68 @@ void test_bcspec() {
     printf("Elapsed time: %.3f ms\n", timer.elapsed());
 }
 
+void test_cathode() {
+    
+    
+    uint2 ntiles = {16, 16};
+    uint2 nx = {16,16};
+
+    float2 box = {25.6, 25.6};
+    float dt = 0.07;
+
+    Simulation sim( ntiles, nx, box, dt );
+
+    float ufl = 1.0e5;
+//    auto uth = make_float3( 0.1, 0.1, 0.1 );
+    auto uth = make_float3( 0., 0., 0. );
+    auto wall = edge::upper;
+    float n0 = 1.0f;
+
+    auto cathode = Cathode( "cathode", +1.0f, make_uint2( 4,4 ), n0, ufl, uth, wall, box, ntiles, nx, dt );
+
+    sim.add_species( &cathode );
+
+    auto bc = sim.species[0] -> get_bc();
+    bc.x = { 
+        .lower = species::bc::open,
+        .upper = species::bc::open
+    };
+    sim.species[0] -> set_bc( bc );
+    
+    sim.species[0] -> save_charge();
+    sim.species[0] -> save();
+    sim.current -> save( fcomp::x );
+    sim.emf -> save( emf::e, fcomp::x );
+
+    float const tmax = 51.2 ;
+
+    printf("Running Cathode test up to t = %g...\n", tmax );
+
+    Timer timer;
+    timer.start();
+
+    while( sim.get_t() < tmax ) {
+
+        sim.advance(); 
+
+        if ( sim.get_iter() % 50 == 0 ) {
+            sim.species[0] -> save_charge();
+            sim.species[0] -> save();
+            sim.current -> save( fcomp::x );
+            sim.emf -> save( emf::e, fcomp::x );
+        }
+
+    }
+
+    printf("Simulation complete at t = %g\n", sim.get_t());
+
+    timer.stop();
+
+    printf("Elapsed time: %.3f ms\n", timer.elapsed());
+}
+
+
+
 int main() {
 
     // test_emf();
@@ -659,7 +722,10 @@ int main() {
 
     // test_bcemf();
 
-    test_bcspec();
+    //test_bcspec();
+
+    test_cathode();
+    // test_wtf();
 
     return 0;
 }

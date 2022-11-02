@@ -99,6 +99,10 @@ class Simulation {
         s -> set_udist( udist, species.size() );
     }
 
+    void add_species( Species * s ) {
+        species.push_back(s);
+    }
+
     /**
      * @brief Gets a pointer to a specific species object
      * 

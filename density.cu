@@ -13,7 +13,7 @@ __global__
  * @param d_tiles   Particle tile information
  * @param d_ix      Particle data (cell)
  * @param d_x       Particle data (position)
- * @param d_u       Particle data (generalized)
+ * @param d_u       Particle data (generalized velocity)
  */
 void _inject_uniform_kernel( bnd<unsigned int> range,
     uint2 const ppc, uint2 const nx, 
