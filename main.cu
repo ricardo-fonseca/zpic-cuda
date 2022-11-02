@@ -652,12 +652,16 @@ void test_cathode() {
     Simulation sim( ntiles, nx, box, dt );
 
     float ufl = 1.0e5;
-//    auto uth = make_float3( 0.1, 0.1, 0.1 );
-    auto uth = make_float3( 0., 0., 0. );
+    auto uth = make_float3( 0.1, 0.1, 0.1 );
     auto wall = edge::upper;
     float n0 = 1.0f;
 
-    auto cathode = Cathode( "cathode", +1.0f, make_uint2( 4,4 ), n0, ufl, uth, wall, box, ntiles, nx, dt );
+    auto cathode = Cathode( "cathode", ufl, wall,
+        +1.0f, make_uint2( 4,4 ), n0, 
+        box, ntiles, nx, dt );
+    
+    cathode.start = -12.8;
+    cathode.uth = uth;
 
     sim.add_species( &cathode );
 

@@ -15,9 +15,6 @@ private:
     /// @brief generalized velocity of cathode flow
     float ufl;
 
-    /// @brief temperature of injected particles
-    float3 uth;
-
     float *h_inj_pos;
     float *d_inj_pos;
 
@@ -32,8 +29,11 @@ public:
     /// @brief Time to end cathode injection
     float end;
 
-    Cathode( std::string const name, float const m_q, 
-        uint2 const ppc, float n0, float cath_ufl, float3 uth, edge::pos wall, 
+    /// @brief temperature of injected particles
+    float3 uth;
+
+    Cathode( std::string const name, float ufl, edge::pos wall, 
+        float const m_q, uint2 const ppc, float n0, 
         float2 const box, uint2 const ntiles, uint2 const nx,
         const float dt );
     
