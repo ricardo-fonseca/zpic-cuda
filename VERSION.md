@@ -5,6 +5,22 @@
 * Thermal boundaries for particles
 * Improve particle tile sorter, make it production ready
 
+## 2022.11.7
+
+__CRITICAL:__ Fixes critical issues
+
+* Fixes a critical issue in non-uniform density profiles
+  * A `block.sync()` was missing after setting the shared variable `np`, randomly
+    leading to improper injection.
+* Changes `Species` class initialization behavior
+  * Adds a `Species::initialize()` method, to be called by the simulation object
+    to complete initialization.
+  * After species is created the user may freely change the species initialization
+    parameters
+  * When the species is added to the simulation (`Simulation::add_species()`) the
+    `Simulation` object will call the `Species::initialize()` method, creating the
+    `particles` data structure and initializing species particles.
+
 ## 2022.11.2
 
 __CRITICAL:__ Fixes critical issues
