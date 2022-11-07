@@ -83,86 +83,6 @@ void test_emf() {
     printf("Elapsed time: %.3f ms\n", timer.elapsed());
 }
 
-/**
- * @brief Tests the tile sort and current deposit
- * 
- * Creates a sphere of particles and free streams it to check if the tile sort
- * is operating correctly
- * 
- */
-void test_sort_deposit() {
-    
-    std::cout << "Running sort/deposit test...\n";
-    
-    Timer timer;
-
-    uint2 ntiles = {16, 16};
-    uint2 nx = {16,16};
-
-    float2 box = {25.6, 25.6};
-    float dt = 0.07;
-
-    Current current( ntiles, nx, box, dt );
-
-    uint2 ppc = {8,8};
-//    auto udist = UDistribution::Cold( make_float3(1000,1000,1000));
-    auto udist = UDistribution::Cold( make_float3(+1000,+1000,+1000));
-
-    bnd<unsigned int> range;
-    range.x = { .lower = 128, .upper = 255 };
-    range.y = { .lower = 128, .upper = 255 };
-
-    // auto density = Density::Step( 1.0, 6.4 );
-    // auto density =  Density::Slab( 1.0, 9.6, 16.0 );
-    //auto density = Density::Sphere( 1.0, make_float2(12.8,12.8), 3.2 );
-    auto density = Density::Uniform( 1.0 );
-
-    Species electrons( "electrons", -1, ppc, density, box, ntiles, nx, dt );
-
-    electrons.inject( range );
-    electrons.set_udist( udist, 0 );
-    electrons.particles->validate( "After injection");
-
-
-
-    electrons.save_charge();
-    current.save( fcomp::x );
-    current.save( fcomp::y );
-    current.save( fcomp::z );
-
-    timer.start();
-
-    int iter = 0;
-    int iter_max = 10;
-    while( iter < iter_max ) {
-        printf(" i = %3d, t = %g \n", iter, iter * dt );
-
-        current.zero();
-
-        electrons.move( current.J );
-        electrons.particles->tile_sort();
-
-        electrons.particles->validate("after tile sort");
-        electrons.iter++;
-
-        current.advance();
-
-        electrons.save_charge();
-        current.save( fcomp::x );
-        current.save( fcomp::y );
-        current.save( fcomp::z );
-
-        iter++;
-    }
-
-    printf(" i = %3d, t = %g (finished)\n", iter, iter * dt );
-
-    timer.stop();
-
-    printf("Elapsed time: %.3f ms\n", timer.elapsed());
-}
-
-
 void test_move_window() {
     
     std::cout << "Running move window test...\n";
@@ -180,12 +100,11 @@ void test_move_window() {
     // Add particles species
     uint2 ppc  = {8,8};
     
-    auto density = Density::Sphere( 1.0, make_float2(25.6,12.8), 6.4 );
-    // auto density = Density::Uniform( 1.0 );
+    Species electrons( "electrons", -1.0f, ppc );
+    electrons.set_density( Density::Sphere( 1.0, make_float2(25.6,12.8), 6.4 ) );
+    sim.add_species( electrons );
 
-    sim.add_species( "electrons", -1.0f, ppc, density, UDistribution::None() );
-
-    sim.species[0] -> save_charge();
+    electrons.save_charge();
 
     sim.set_moving_window();
 
@@ -196,8 +115,7 @@ void test_move_window() {
         printf(" i = %3d, t = %g \n", sim.get_iter(), sim.get_t() );
 
         sim.advance();
-
-        sim.species[0] -> save_charge();
+        electrons.save_charge();
     }
 
     printf(" i = %3d, t = %g (finished)\n", sim.get_iter(), sim.get_t() );
@@ -251,20 +169,24 @@ void test_weibel() {
     float3 ufl = {0., 0., 0.6};
     float3 uth = {0.1, 0.1, 0.1};
 
-    auto udist = UDistribution::Thermal( uth, ufl );
-    //auto udist = UDistribution::ThermalCorr( uth, ufl, 16 );
+    UDistribution::Thermal udist( uth, ufl );
 
-    sim.add_species( "electrons", -1.0f, ppc, Density::Uniform(1.0f), udist );
+    Species electrons( "electrons", -1.0f, ppc );
+    electrons.set_udist( udist );
+
+    Species positrons( "positrons", +1.0f, ppc );
     udist.ufl.z = -udist.ufl.z;
-    sim.add_species( "positrons", +1.0f, ppc, Density::Uniform(1.0f), udist );
+    positrons.set_udist( udist );
 
+    sim.add_species( electrons );
+    sim.add_species( positrons );
 
-    sim.species[0]-> save_phasespace ( 
+    electrons.save_phasespace ( 
         phasespace::ux, make_float2( -1, 1 ), 128,
         phasespace::uz, make_float2( -1, 1 ), 128
         );
 
-    sim.species[1]-> save_phasespace ( 
+    positrons.save_phasespace ( 
         phasespace::ux, make_float2( -1, 1 ), 128,
         phasespace::uz, make_float2( -1, 1 ), 128
         );
@@ -317,9 +239,10 @@ void test_lwfa() {
 
     // Add particles species
     uint2 ppc  = {4,4};
-
-    sim.add_species( "electrons", -1.0f, ppc, Density::Step( coord::x, 1.0, 20.48 ), UDistribution::None() );
-
+    
+    Species electrons( "electrons", -1.0f, ppc );
+    electrons.set_density( Density::Step( coord::x, 1.0, 20.48 ) );
+    
     Laser::Gaussian laser;
     laser.start = 17.0;
     laser.fwhm = 2.0;
@@ -357,11 +280,11 @@ void test_lwfa() {
     sim.emf -> save( emf::e, fcomp::y );
     sim.emf -> save( emf::e, fcomp::z );
 
-    sim.species[0]-> save_phasespace ( 
+    electrons.save_phasespace ( 
         phasespace::x,  make_float2( 0., 20.48 ), 1024,
         phasespace::ux, make_float2( -2., 2 ), 512
         );
-    sim.species[0]->save();
+    electrons.save();
 
     printf("Elapsed time was: %.3f s\n", timer.elapsed( timer::s ));
 }
@@ -405,17 +328,32 @@ void test_mushroom() {
     float3 uth_e = {0.001, 0.001, 0.001};
     float3 uth_i = {0.0001, 0.0001, 0.0001};
 
-    auto udist_e = UDistribution::ThermalCorr( uth_e, ufl, 16 );
-    auto udist_i = UDistribution::ThermalCorr( uth_i, ufl, 16 );
+    UDistribution::ThermalCorr udist_e( uth_e, ufl, 16 );
+    UDistribution::ThermalCorr udist_i( uth_i, ufl, 16 );
 
-    sim.add_species( "electrons-up", -1.0f, ppc, Density::Slab(coord::y,1.0,0,box.y/2), udist_e );
-    sim.add_species( "ions-up",    +100.0f, ppc, Density::Slab(coord::y,1.0,0,box.y/2), udist_i );
+    Species e_up( "electrons-up", -1.0f, ppc );
+    e_up.set_density( Density::Slab(coord::y,1.0,0,box.y/2) );
+    e_up.set_udist( udist_e );
+    sim.add_species( e_up );
+
+    Species i_up( "ions-up",    +100.0f, ppc );
+    i_up.set_density( Density::Slab(coord::y,1.0,0,box.y/2) );
+    i_up.set_udist( udist_i );
+    sim.add_species( i_up );
+
 
     udist_e.ufl.z = - udist_e.ufl.z;
     udist_i.ufl.z = - udist_i.ufl.z;
 
-    sim.add_species( "electrons-down", -1.0f, ppc, Density::Slab(coord::y,1.0,box.y/2,box.y), udist_e );
-    sim.add_species( "ions-down",    +100.0f, ppc, Density::Slab(coord::y,1.0,box.y/2,box.y), udist_i );
+    Species e_down( "electrons-down", -1.0f, ppc );
+    e_down.set_density( Density::Slab(coord::y,1.0,box.y/2,box.y) );
+    e_down.set_udist( udist_e );
+    sim.add_species( e_down );
+
+    Species i_down(  "ions-down",    +100.0f, ppc );
+    i_down.set_density( Density::Slab(coord::y,1.0,box.y/2,box.y) );
+    i_down.set_udist( udist_i );
+    sim.add_species( i_down );
 
     // Run simulation
     int const nmax = 2000 ;
@@ -480,17 +418,31 @@ void test_kh() {
     float3 uth_e = {0.001, 0.001, 0.001};
     float3 uth_i = {0.0001, 0.0001, 0.0001};
 
-    auto udist_e = UDistribution::ThermalCorr( uth_e, ufl, 16 );
-    auto udist_i = UDistribution::ThermalCorr( uth_i, ufl, 16 );
+    UDistribution::ThermalCorr udist_e( uth_e, ufl, 16 );
+    UDistribution::ThermalCorr udist_i( uth_i, ufl, 16 );
 
-    sim.add_species( "electrons-r", -1.0f, ppc, Density::Slab(coord::y,1.0,0,box.y/2), udist_e );
-    sim.add_species( "ions-r",    +100.0f, ppc, Density::Slab(coord::y,1.0,0,box.y/2), udist_i );
+    Species e_right( "electrons-r", -1.0f, ppc );
+    e_right.set_density( Density::Slab(coord::y,1.0,0,box.y/2) );
+    e_right.set_udist( udist_e );
+    sim.add_species( e_right );
+    
+    Species i_right( "ions-r",    +100.0f, ppc );
+    i_right.set_density( Density::Slab(coord::y,1.0,0,box.y/2) );
+    i_right.set_udist( udist_i );
+    sim.add_species( i_right );
 
     udist_e.ufl.x = - udist_e.ufl.x;
     udist_i.ufl.x = - udist_i.ufl.x;
 
-    sim.add_species( "electrons-l", -1.0f, ppc, Density::Slab(coord::y,1.0,box.y/2,box.y), udist_e );
-    sim.add_species( "ions-l",    +100.0f, ppc, Density::Slab(coord::y,1.0,box.y/2,box.y), udist_i );
+    Species e_left( "electrons-l", -1.0f, ppc );
+    e_left.set_density( Density::Slab(coord::y,1.0,0,box.y/2) );
+    e_left.set_udist( udist_e );
+    sim.add_species( e_left );
+
+    Species i_left( "ions-l",    +100.0f, ppc );
+    i_left.set_density( Density::Slab(coord::y,1.0,0,box.y/2) );
+    i_left.set_udist( udist_i );
+    sim.add_species( i_left );
 
     sim.current->set_filter( Filter::Binomial ( coord::x, 2 ) );
 
@@ -598,21 +550,18 @@ void test_bcspec() {
 
     Simulation sim( ntiles, nx, box, dt );
 
+    Species electrons( "electrons", -1.0f, make_uint2( 8, 8 ) );
+    electrons.set_density( Density::Sphere( 1.0, make_float2(12.8,12.8), 6.4 ) );
+    electrons.set_udist( UDistribution::Cold( make_float3( -1.0e8, 0, 0 ) ) );
 
-    sim.add_species( "electrons", -1.0f, 
-        make_uint2( 8, 8 ), // ppc
-        Density::Sphere( 1.0, make_float2(12.8,12.8), 6.4 ),
-        UDistribution::Cold( make_float3( -1.0e8, 0, 0 ) )
-    );
-
-    auto bc = sim.species[0] -> get_bc();
+    auto bc = electrons.get_bc();
     bc.x = { 
         .lower = species::bc::reflecting,
         .upper = species::bc::reflecting
     };
-    sim.species[0] -> set_bc( bc );
+    electrons.set_bc( bc );
 
-    sim.species[0] -> save_charge();
+    electrons.save_charge();
     sim.current -> save( fcomp::x );
     sim.emf -> save( emf::e, fcomp::x );
 
@@ -627,7 +576,7 @@ void test_bcspec() {
 
         sim.advance();
         if ( sim.get_iter() % 50 == 0 ) {
-            sim.species[0] -> save_charge();
+            electrons.save_charge();
             sim.current -> save( fcomp::x );
             sim.emf -> save( emf::e, fcomp::x );
         }
@@ -641,41 +590,39 @@ void test_bcspec() {
 }
 
 void test_cathode() {
-    
-    
-    uint2 ntiles = {16, 16};
-    uint2 nx = {16,16};
 
-    float2 box = {25.6, 25.6};
-    float dt = 0.07;
+    Simulation sim( 
+        make_uint2( 16, 16 ),       // ntiles
+        make_uint2( 16, 16 ),       // nx
+        make_float2( 25.6, 25.6 ),  // box
+        0.07                        // dt
+    );
 
-    Simulation sim( ntiles, nx, box, dt );
+    // Create cathode
+    Cathode cathode( 
+        "cathode",
+        +1.0f,              // m_q
+        make_uint2(4,4),    // ppc
+        1.0e5f              // ufl
+    );
 
-    float ufl = 1.0e5;
-    auto uth = make_float3( 0.1, 0.1, 0.1 );
-    auto wall = edge::upper;
-    float n0 = 1.0f;
-
-    auto cathode = Cathode( "cathode", ufl, wall,
-        +1.0f, make_uint2( 4,4 ), n0, 
-        box, ntiles, nx, dt );
-    
+    // Set additional cathode parameters
+    cathode.n0 = 1.0f;
+    cathode.wall = edge::lower;
     cathode.start = -6.4;
-    cathode.uth = uth;
+    cathode.uth = make_float3( 0.1, 0.1, 0.1 );;
 
     auto bc = cathode.get_bc();
     bc.x = { 
         .lower = species::bc::open,
         .upper = species::bc::open
     };
+
     cathode.set_bc( bc );
+    sim.add_species( cathode );
 
-    sim.add_species( &cathode );
-    cathode.inject();
-
-
-    sim.species[0] -> save_charge();
-    sim.species[0] -> save();
+    cathode.save_charge();
+    cathode.save();
     sim.current -> save( fcomp::x );
     sim.emf -> save( emf::e, fcomp::x );
 
@@ -691,8 +638,8 @@ void test_cathode() {
         sim.advance(); 
 
         if ( sim.get_iter() % 50 == 0 ) {
-            sim.species[0] -> save_charge();
-            sim.species[0] -> save();
+            cathode.save_charge();
+            cathode.save();
             sim.current -> save( fcomp::x );
             sim.emf -> save( emf::e, fcomp::x );
         }

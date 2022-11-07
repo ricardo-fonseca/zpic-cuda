@@ -450,7 +450,6 @@ void _bnd_out( int const lim,
 
     // Fill holes left behind
     {
-        int k;
         for( int i = block.thread_rank(); i < n0; i+= block.num_threads() ) {
             int c;
 
@@ -459,7 +458,7 @@ void _bnd_out( int const lim,
             if ( dir == coord::y ) c = ( ix[i].y < 0 ) || ( ix[i].y >= lim );
 
             if ( c ) {
-                k = atomicAdd( &_k, 1 );
+                int k = atomicAdd( &_k, 1 );
                 ix[i] = tmp_ix[ k ];
                 x[i] = tmp_x[ k ];
                 u[i] = tmp_u[ k ];
@@ -475,6 +474,131 @@ void _bnd_out( int const lim,
     }
 }
 
+#if 0
+
+// __UNDER DEVELOPMENT__ do not remove!
+
+
+/**
+ * @brief CUDA kernel for copying particles out of the tile to a temp buffer
+ * 
+ * This version handles both directions (x,y) at once. Outgoing particles will
+ * be organized in the temp buffer according to the direction index j, where
+ * 
+ * j = dir_y * 3 + dir_x
+ * 
+ * Each variable dir_* will be 0 (not leaving in that direction), 1 (leaving
+ * through the lower boundary) or 2 (leaving through the open boundary), e.g.
+ * a particle leaving through the top right corner will have j = 2*3 + 2 = 8.
+ * 
+ * @param nx            Tile grid size (particle limits)
+ * @param d_tiles       Tile information (main buffer)
+ * @param d_ix          Particle cells (main buffer)
+ * @param d_x           Particle positions (main buffer)
+ * @param d_u           Particle momenta (main buffer)
+ * @param tmp_d_tiles   Tile information (temp buffer)
+ * @param tmp_d_ix      Particle cells (temp buffer)
+ * @param tmp_d_x       Particle positions (temp buffer)
+ * @param tmp_d_u       Particle generalized velocity (temp buffer)
+ */
+void _bnd_out_xy( int2 const nx, 
+    t_part_tile * const __restrict__ d_tiles,
+    int2 * __restrict__ d_ix, float2 * __restrict__ d_x, float3 * __restrict__ d_u,
+    t_part_tile * const __restrict__ tmp_d_tiles,
+    int2 * __restrict__ tmp_d_ix, float2 * __restrict__ tmp_d_x, float3 * __restrict__ tmp_d_u )
+{
+    auto block = cg::this_thread_block();
+    auto warp  = cg::tiled_partition<32>(block);
+
+    const int tid = blockIdx.y * gridDim.x + blockIdx.x;
+
+    unsigned int const size = d_tiles[ tid ].n;
+    unsigned int const offset =  d_tiles[ tid ].pos;
+    int2   __restrict__ *ix = &d_ix[ offset ];
+    float2 __restrict__ *x  = &d_x[ offset ];
+    float3 __restrict__ *u  = &d_u[ offset ];
+
+    unsigned int const tmp_offset =  tmp_d_tiles[ tid ].pos;
+    int2   __restrict__ *tmp_ix = &tmp_d_ix[ tmp_offset ];
+    float2 __restrict__ *tmp_x  = &tmp_d_x[ tmp_offset ];
+    float3 __restrict__ *tmp_u  = &tmp_d_u[ tmp_offset ];
+
+    // n[ i ] - Number of particles moving in direction i (0 index are particles
+    //          not moving)
+    __shared__ unsigned int n[9];
+
+    // k[ i ] - Offset in output buffer for particles going in direction i
+    // k[ 0 ] is used for particles that will be used to fill the holes left by particles
+    __shared__ unsigned int k[9];
+
+    for( unsigned int i = block.thread_rank(); i < 9 ; i+= block.num_threads() ) {
+        n[i] = 0;
+    }
+    block.sync();
+
+    // Count particles moving to other tiles
+    for( unsigned int i = block.thread_rank(); i < size; i+= block.num_threads() ) {
+
+        int xc = ( ix[i].x < 0 ) + 2 * ( ix[i].x >= nx.x );
+        int yc = ( ix[i].y < 0 ) + 2 * ( ix[i].y >= nx.y );
+
+        int key = xc + 3*yc;
+        if ( key > 0 ) atomicAdd( &n[key], 1 );
+    }
+    block.sync();
+
+    __shared__ unsigned int k0;
+
+    if ( block.thread_rank() == 0 ) {
+        unsigned int nmove = 0;
+        k[ 0 ] = 0;
+        for( unsigned int i = 1; i < 9; i++ ) {
+            nmove += n[i];
+            k[i] = k[i-1] + n[i-1];
+        }
+        k[0] = nmove;
+        n[0] = size - nmove;
+        k0 = nmove;
+
+        // Store new values on tile information arrays
+        d_tiles[ tid ].n = size - nmove;
+        for( int i = 0; i < 9; i++ ) tmp_d_tiles[tid].nb[i] = n[i];
+    }
+
+    block.sync();
+
+    const unsigned int n0 = n[0];
+
+    for( unsigned int i = block.thread_rank(); i < size; i+= block.num_threads() ) {
+        int xc = ( ix[i].x < 0 ) + 2 * ( ix[i].x >= nx.x );
+        int yc = ( ix[i].y < 0 ) + 2 * ( ix[i].y >= nx.y );
+        int key = xc + 3*yc;
+
+        if ( key > 0 || ( key == 0 && i >= n0 ) ) {
+            unsigned int idx = atomicAdd( &k[key], 1 );
+            tmp_ix[idx] = ix[i];
+            tmp_x[idx]  =  x[i];
+            tmp_u[idx]  =  u[i];
+        }
+    }
+
+    block.sync();
+
+    // Fill holes left behind
+    for( unsigned int i = block.thread_rank(); i < n0; i+= block.num_threads() ) {
+        int xc = ( ix[i].x < 0 ) || ( ix[i].x >= nx.x );
+        int yc = ( ix[i].y < 0 ) || ( ix[i].y >= nx.y );
+
+        if ( xc || yc ) {
+            int idx = atomicAdd( &k0, 1 );
+            ix[i] = tmp_ix[ k ];
+            x[i] = tmp_x[ k ];
+            u[i] = tmp_u[ k ];
+        }
+    }
+}
+
+#endif
 
 #if 0
 

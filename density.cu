@@ -20,6 +20,19 @@ void _inject_uniform_kernel( bnd<unsigned int> range,
     t_part_tile * const __restrict__ d_tiles,
     int2 * __restrict__ d_ix, float2 * __restrict__ d_x, float3 * __restrict__ d_u )
 {
+
+    auto block = cg::this_thread_block();
+
+    // Tile ID
+    int const tid = blockIdx.y * gridDim.x + blockIdx.x;
+
+    // Store number of particles before injection
+    const int np = d_tiles[ tid ].n;
+    if ( block.thread_rank() == 0 ) {
+        d_tiles[ tid ].nb = np;
+    }
+    block.sync();
+
     // Find injection range in tile coordinates
     int ri0 = range.x.lower - blockIdx.x * nx.x;
     int ri1 = range.x.upper - blockIdx.x * nx.x;
@@ -44,14 +57,10 @@ void _inject_uniform_kernel( bnd<unsigned int> range,
         int const row = (ri1-ri0+1);
         int const vol = (rj1-rj0+1) * row;
 
-        int const tid = blockIdx.y * gridDim.x + blockIdx.x;
-
         const int offset =  d_tiles[ tid ].pos;
         int2   * __restrict__ const ix = &d_ix[ offset ];
         float2 * __restrict__ const x  = &d_x[ offset ];
         float3 * __restrict__ const u  = &d_u[ offset ];
-        
-        const int np = d_tiles[ tid ].n;
 
         const int np_cell = ppc.x * ppc.y;
 
@@ -82,7 +91,7 @@ void _inject_uniform_kernel( bnd<unsigned int> range,
         }
 
         // Update global number of particles in tile
-        if ( threadIdx.x == 0 )
+        if ( block.thread_rank() == 0 )
             d_tiles[ tid ].n = np + vol * np_cell ;
     }
 }
@@ -120,6 +129,20 @@ void _inject_step_kernel( bnd<unsigned int> range,
     t_part_tile * const __restrict__ d_tiles,
     int2* __restrict__ d_ix, float2* __restrict__ d_x, float3* __restrict__ d_u )
 {
+
+    auto block = cg::this_thread_block();
+
+    // Tile ID
+    int const tid = blockIdx.y * gridDim.x + blockIdx.x;
+
+    // Store number of particles before injection
+    __shared__ int np;
+    if ( block.thread_rank() == 0 ) {
+        np = d_tiles[ tid ].n;
+        d_tiles[ tid ].nb = d_tiles[ tid ].n;
+    }
+    block.sync();
+
     // Find injection range in tile coordinates
     int ri0 = range.x.lower - blockIdx.x * nx.x;
     int ri1 = range.x.upper - blockIdx.x * nx.x;
@@ -144,8 +167,6 @@ void _inject_step_kernel( bnd<unsigned int> range,
         int const row = (ri1-ri0+1);
         int const vol = (rj1-rj0+1) * row;
 
-        const int tid = blockIdx.y * gridDim.x + blockIdx.x;
-
         const int offset =  d_tiles[ tid ].pos;
         int2   __restrict__ *ix = &d_ix[ offset ];
         float2 __restrict__ *x  = &d_x[ offset ];
@@ -153,9 +174,6 @@ void _inject_step_kernel( bnd<unsigned int> range,
 
         double dpcx = 1.0 / ppc.x;
         double dpcy = 1.0 / ppc.y;
-
-        __shared__ int np;
-        np = d_tiles[ tid ].n;
 
         const int shiftx = blockIdx.x * nx.x;
         const int shifty = blockIdx.y * nx.y;
@@ -184,9 +202,9 @@ void _inject_step_kernel( bnd<unsigned int> range,
             }
         }
 
-        __syncthreads();
+        block.sync();
 
-        if ( threadIdx.x == 0 )
+        if ( block.thread_rank() == 0 )
             d_tiles[ tid ].n = np;
     }
 }
@@ -235,6 +253,18 @@ void _inject_slab_kernel( bnd<unsigned int> range,
     t_part_tile * const __restrict__ d_tiles,
     int2* __restrict__ d_ix, float2* __restrict__ d_x, float3* __restrict__ d_u )
 {
+    auto block = cg::this_thread_block();
+
+    // Tile ID
+    int const tid = blockIdx.y * gridDim.x + blockIdx.x;
+
+    // Store number of particles before injection
+    __shared__ int np;
+    if ( block.thread_rank() == 0 ) {
+        np = d_tiles[ tid ].n;
+        d_tiles[ tid ].nb = d_tiles[ tid ].n;
+    }
+    block.sync();
 
     // Find injection range in tile coordinates
     int ri0 = range.x.lower - blockIdx.x * nx.x;
@@ -260,8 +290,6 @@ void _inject_slab_kernel( bnd<unsigned int> range,
         int const row = (ri1-ri0+1);
         int const vol = (rj1-rj0+1) * row;
 
-        const int tid = blockIdx.y * gridDim.x + blockIdx.x;
-
         const int offset =  d_tiles[ tid ].pos;
         int2   __restrict__ *ix = &d_ix[ offset ];
         float2 __restrict__ *x  = &d_x[ offset ];
@@ -269,9 +297,6 @@ void _inject_slab_kernel( bnd<unsigned int> range,
 
         double dpcx = 1.0 / ppc.x;
         double dpcy = 1.0 / ppc.y;
-
-        __shared__ int np;
-        np = d_tiles[ tid ].n;
 
         const int shiftx = blockIdx.x * nx.x;
         const int shifty = blockIdx.y * nx.y;
@@ -300,9 +325,9 @@ void _inject_slab_kernel( bnd<unsigned int> range,
             }
         }
 
-        __syncthreads();
+        block.sync();
 
-        if ( threadIdx.x == 0 )
+        if ( block.thread_rank() == 0 )
             d_tiles[ tid ].n = np;
     }
 }
@@ -354,6 +379,20 @@ void _inject_sphere_kernel( bnd<unsigned int> range,
     t_part_tile * const __restrict__ d_tiles,
     int2* __restrict__ d_ix, float2* __restrict__ d_x, float3* __restrict__ d_u )
 {
+
+    auto block = cg::this_thread_block();
+
+    // Tile ID
+    int const tid = blockIdx.y * gridDim.x + blockIdx.x;
+
+    // Store number of particles before injection
+    __shared__ int np;
+    if ( block.thread_rank() == 0 ) {
+        np = d_tiles[ tid ].n;
+        d_tiles[ tid ].nb = d_tiles[ tid ].n;
+    }
+    block.sync();
+
     // Comparing signed and unsigned integers does not work
     int const nxx = nx.x;
     int const nxy = nx.y;
@@ -379,8 +418,6 @@ void _inject_sphere_kernel( bnd<unsigned int> range,
         int const row = (ri1-ri0+1);
         int const vol = (rj1-rj0+1) * row;
 
-        const int tid = blockIdx.y * gridDim.x + blockIdx.x;
-
         const int offset =  d_tiles[ tid ].pos;
         int2   __restrict__ *ix = &d_ix[ offset ];
         float2 __restrict__ *x  = &d_x[ offset ];
@@ -388,9 +425,6 @@ void _inject_sphere_kernel( bnd<unsigned int> range,
 
         double dpcx = 1.0 / ppc.x;
         double dpcy = 1.0 / ppc.y;
-
-        __shared__ int np;
-        np = d_tiles[ tid ].n;
 
         const int shiftx = blockIdx.x * nxx;
         const int shifty = blockIdx.y * nxy;
@@ -420,9 +454,8 @@ void _inject_sphere_kernel( bnd<unsigned int> range,
             }
         }
 
-        __syncthreads();
-
-        if ( threadIdx.x == 0 )
+        block.sync();
+        if ( block.thread_rank() == 0 )
             d_tiles[ tid ].n = np;
     }
 }

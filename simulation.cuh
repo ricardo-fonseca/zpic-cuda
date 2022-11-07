@@ -48,9 +48,6 @@ class Simulation {
     ~Simulation() {
         delete current;
         delete emf;
-
-        for (int i = 0; i < species.size(); i++)
-            delete species[i];
         
         // Check for any device errors that went under the radar
         auto err_sync = cudaPeekAtLastError();
@@ -67,6 +64,10 @@ class Simulation {
         }
     };
 
+    /**
+     * @brief Turns on the moving window algorithm
+     * 
+     */
     void set_moving_window() {
         emf -> set_moving_window();
         current -> set_moving_window();
@@ -75,32 +76,13 @@ class Simulation {
     }
 
     /**
-     * @brief Adds a new particle species to the simulation object
-     * 
-     * @param name      Species name
-     * @param m_q       mass over charge ratio
-     * @param ppc       number of particles per cell
-     * @param n0        Reference density value
-     * @param uth       Initial thermal velocity
-     * @param ufl       Initial fluid velocity
+     * @brief Adds particle species to the simulation
+     *
+     * @param s     Particle species 
      */
-    void add_species( std::string const name, float const m_q, uint2 const ppc,
-        Density::Profile const & dens, UDistribution::Type const & udist )
-    {
-        Species * s = new Species( 
-            name, m_q, ppc, dens, 
-            box, ntiles, nx, dt );
-        species.push_back( s );
-
-        // Inject particles
-        s -> inject( );
-
-        // Set momentum distribution
-        s -> set_udist( udist, species.size() );
-    }
-
-    void add_species( Species * s ) {
-        species.push_back(s);
+    void add_species( Species & s ) {
+        species.push_back( &s );
+        s.initialize( box, ntiles, nx, dt, species.size() );
     }
 
     /**
@@ -112,10 +94,14 @@ class Simulation {
     Species * get_species( std::string name ) {
         int id = 0;
         for( id = 0; id < species.size(); id++ )
-            if ( (species[id])->name == name ) break;
+            if ( (species[id])->get_name() == name ) break;
         return ( id < species.size() ) ? species[id] : nullptr;
     }
 
+    /**
+     * @brief Advance simulation 1 iteration
+     * 
+     */
     void advance() {
 
         // Zero global current
@@ -145,7 +131,7 @@ class Simulation {
         double part_ene = 0;
         for (int i = 0; i < species.size(); i++) {
             double kin = species[i]->get_energy();
-            std::cout << "(*info*) " << species[i]->name << " = " << kin << "\n";
+            std::cout << "(*info*) " << species[i]->get_name() << " = " << kin << "\n";
             part_ene += kin;
         }
 

@@ -43,37 +43,43 @@ void _cathode_init( float * d_inj_pos, int ppc_x ) {
  * @brief Construct a new Cathode:: Cathode object
  * 
  * @param name      Cathode name
- * @param ufl       Fluid velocity
- * @param wall      Cathode wall
  * @param m_q       Mass over charge ratio
  * @param ppc       Number of particles per cell
- * @param n0        Reference density for cathode species
- * @param box       Simulation box size
- * @param ntiles    Number of tiles
- * @param nx        Number of grid points per tile
- * @param dt        Time step
+ * @param ufl       Fluid velocity
  */
-Cathode::Cathode( std::string const name, float ufl, edge::pos wall, 
-        float const m_q, uint2 const ppc, float n0, 
-        float2 const box, uint2 const ntiles, uint2 const nx,
-        const float dt ) :
-    Species( name, m_q, ppc, Density::None(n0), 
-            box, ntiles, nx, dt ),  ufl( abs(ufl) ), uth(uth), wall( wall )
+Cathode::Cathode( std::string const name, float const m_q, uint2 const ppc, float ufl ):
+    Species( name, m_q, ppc ), ufl( abs(ufl) )
 { 
-    // Default values for start, end and uth
-    start = 0.0;
+    if ( ufl == 0 ) {
+        std::cerr << "(*error*) Cathodes cannot have ufl = 0, aborting...\n";
+        exit(1);
+    }
+
+    // Default values
+    wall  = edge::lower;
+    start = 0;
     end   = std::numeric_limits<float>::infinity();
     uth   = make_float3( 0, 0, 0 );
-    
+    n0    = 1.0;
+}
+
+void Cathode::initialize( float2 const box_, uint2 const ntiles, uint2 const nx,
+    float const dt_, int const id_ ) {
+
     // Cathode velocity (always > 0)
     vel = (ufl / sqrtf( ufl * ufl + 1.0f )) ;
-
 
     // Initialize position of cathode particles in the cell outside the box
     malloc_dev( d_inj_pos, ppc.x );
     _cathode_init <<< 1, ppc.x >>> ( d_inj_pos, ppc.x );
 
+    // Complete species initialization
+    Species::set_udist( UDistribution::Thermal( uth, make_float3( ufl, 0, 0 ) ) );
+    Species::set_density( Density::None( n0 ) );
+    Species::initialize( box_, ntiles, nx, dt_, id_ );
+
 }
+
 
 Cathode::~Cathode() {
     free_dev( d_inj_pos );
@@ -86,6 +92,7 @@ Cathode::~Cathode() {
  * This also sets the velocity of the injected particles
  */
 void Cathode::inject() {
+    
     if ( iter == 0 && start < 0 ) {
 
         uint2 g_nx = particles -> g_nx();
@@ -106,7 +113,7 @@ void Cathode::inject( bnd<unsigned int> range ) {
 
     if ( iter == 0 && start < 0 ) {
         float x0, x1, u;
-        
+
         switch (wall)
         {
         case edge::lower:
@@ -121,12 +128,12 @@ void Cathode::inject( bnd<unsigned int> range ) {
             u = - ufl;
             break;
         }
-        
-        auto cathode_density = Density::Slab( coord::x, 1.0f, x0, x1 );
 
+        Density::Slab cathode_density( coord::x, n0, x0, x1 );
         cathode_density.inject( particles, ppc, dx, make_float2(0,0), range );
-        auto udist = UDistribution::Thermal( uth, make_float3( u, 0, 0 ) );
-        set_udist( udist, 0 );
+
+        UDistribution::Thermal udist( uth, make_float3( u, 0, 0 ) );
+        udist.set( *particles, id );
     }
 }
 
@@ -373,17 +380,14 @@ void Cathode::advance( EMF const &emf, Current &current )
     // Advance particles using superclass methods
     Species::advance( emf, current );
 
-    // Advance position of particles to inject
-    
     double t = ( iter - 1 ) * dt;
-
     if (( t >= start ) && ( t < end ) ) { 
 
         dim3 grid( 1, particles -> ntiles.y );
         dim3 block( 32 );
         size_t shm_size = ppc.x * sizeof( float );
 
-        uint2 rnd_seed = {12345 + (unsigned int) iter, 67890 };
+        uint2 rnd_seed = {12345 + (unsigned int) iter, 67890 + (unsigned int ) id };
 
         switch (wall)
         {

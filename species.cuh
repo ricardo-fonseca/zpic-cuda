@@ -64,87 +64,191 @@ namespace species {
 class Species {
 
 protected:
+
+     /// @brief Species name
+    std::string name;
+
+     /// @brief Unique species identifier
+    int id;
+
+     /// @brief  Mass over charge ratio
+    float m_q;
+
+    /// @brief Nunber of particles per cell
     uint2 ppc;
 
-    float n0;
-    
+    /// @brief reference particle charge
+    float q;
+
+    /// @brief Cell dize
     float2 dx;
+
+    /// @brief Simulation box size
+    float2 box;
 
     /// @brief Time step
     float dt;
 
-    /// @brief Cell and simulation box size
-    float2 box;
+     /// @brief Iteration
+    int iter;
 
-private:
+     /// @brief Particle data buffer
+    Particles *particles;
 
-
-    Density::Profile * density;
-
-    float q;
-
-    // Secondary data buffer to speed up some calculations
+     /// @brief Secondary data buffer to speed up some calculations
     Particles *tmp;
 
-    // Mass over charge ratio
-    float m_q;
+private:
 
     /// @brief Boundary condition
     species::bc_type bc;
 
+     /// @brief Moving window information
+    MovingWindow moving_window;
+
+    /// @brief Initial density profile
+    Density::Profile * density;
+
+    /// @brief Initial velocity distribution
+    UDistribution::Type * udist;
+
+    /// @brief Total species energy on device
+    double *d_energy;
+
     __host__
     /**
-     * @brief Process boundary conditions
+     * @brief Process (physical) boundary conditions
      * 
      */
     void process_bc();
 
-    // Moving window information
-    MovingWindow moving_window;
-
     __host__
+    /**
+     * @brief Shift particle positions due to moving window motion
+     * 
+     */
     void move_window_shift();
 
     __host__
+    /**
+     * @brief Inject new particles due to moving window motion
+     * 
+     */
     void move_window_inject();
 
     __host__
+    /**
+     * @brief Deposit 1D phasespace density
+     * 
+     * @param d_data    Data buffer
+     * @param q         Quantity for axis
+     * @param range     Value range
+     * @param size      Number of grid points
+     */
     void dep_phasespace( float * const d_data, 
         phasespace::quant q, float2 const range, unsigned const size ) const;
 
     __host__
+    /**
+     * @brief Deposit 2D phasespace density
+     * 
+     * @param d_data    Data buffer
+     * @param quant0    axis 0 quantity
+     * @param range0    axis 0 value range
+     * @param size0     axis 0 number of points
+     * @param quant1    axis 1 quantity
+     * @param range1    axis 1 value range
+     * @param size1     axis 1 number of points
+     */
     void dep_phasespace( float * const d_data,
         phasespace::quant quant0, float2 range0, unsigned const size0,
         phasespace::quant quant1, float2 range1, unsigned const size1 ) const;
 
-    double *d_energy;
-
 public:
 
-    // Iteration
-    int iter;
-
-    // Species name
-    std::string name;
-
-    // Particle data buffer
-    Particles *particles;
-
+    /// @brief Type of particle pusher to use
     species::pusher push_type;
 
     __host__
-    Species( std::string const name, float const m_q, 
-        uint2 const ppc, Density::Profile const & density,
-        float2 const box, uint2 const ntiles, uint2 const nx,
-        const float dt );
-    
+    /**
+     * @brief Construct a new Species object
+     * 
+     * @param name  Name for the species object (used for diagnostics)
+     * @param m_q   Mass over charge ratio
+     * @param ppc   Number of particles per cell
+     */
+    Species( std::string const name, float const m_q, uint2 const ppc );
+
+    /**
+     * @brief Initialize data structures
+     * 
+     * @param box       Simulation global box size
+     * @param ntiles    Number of tiles
+     * @param nx        Title grid dimension
+     * @param dt        
+     * @param id 
+     */
+    virtual void initialize( float2 const box, uint2 const ntiles, uint2 const nx,
+        float const dt, int const id_ );
+
     __host__
+    /**
+     * @brief Destroy the Species object
+     * 
+     */
     ~Species();
 
-    __host__
-    species::bc_type get_bc( ) { return bc; }
+    /**
+     * @brief Get the species name
+     * 
+     * @return std::string 
+     */
+    auto get_name() { return name; }
+
+    /**
+     * @brief Set the density profile object
+     * 
+     * @param new_density   New density object to be cloned
+     */
+    virtual void set_density( Density::Profile const & new_density ) {
+        delete density;
+        density = new_density.clone();
+    }
+
+    /**
+     * @brief Get the density object
+     * 
+     * @return Density::Profile& 
+     */
+    auto & get_density() {
+        return * density;
+    }
+
+    /**
+     * @brief Set the velocity distribution object
+     * 
+     * @param new_udist     New udist object to be cloned
+     */
+    virtual void set_udist( UDistribution::Type const & new_udist ) {
+        delete udist;
+        udist = new_udist.clone();
+    }
+
+    /**
+     * @brief Get the udist object
+     * 
+     * @return UDistribution::Type& 
+     */
+    auto & get_udist() {
+        return *udist;
+    } 
 
     __host__
+    /**
+     * @brief Sets the boundary condition type
+     * 
+     * @param new_bc 
+     */
     void set_bc( species::bc_type new_bc ) {
 
         // Validate parameters
@@ -167,16 +271,25 @@ public:
         // Store new values
         bc = new_bc;
 
-
         std::string bc_name[] = {"open", "periodic", "reflecting"};
         std::cout << "(*info*) Species " << name << " boundary conditions\n";
         std::cout << "(*info*) x : [ " << bc_name[ bc.x.lower ] << ", " << bc_name[ bc.x.upper ] << " ]\n";
         std::cout << "(*info*) y : [ " << bc_name[ bc.y.lower ] << ", " << bc_name[ bc.y.upper ] << " ]\n";
 
         // Set periodic flags on tile grids
-        particles->periodic.x = ( bc.x.lower == species::bc::periodic );
-        particles->periodic.y = ( bc.y.lower == species::bc::periodic );
+        if ( particles ) {
+            particles->periodic.x = ( bc.x.lower == species::bc::periodic );
+            particles->periodic.y = ( bc.y.lower == species::bc::periodic );
+        }
     }
+
+    __host__
+    /**
+     * @brief Get the current boundary condition types
+     * 
+     * @return species::bc_type 
+     */
+    auto get_bc( ) { return bc; }
 
     __host__
     /**
@@ -200,28 +313,64 @@ public:
     }
 
     __host__
+    /**
+     * @brief Inject particles in the simulation box
+     * 
+     */
     virtual void inject();
+
     __host__
+    /**
+     * @brief Inject particles in the specified range of the simulation
+     * 
+     * @param range     Range in which to inject particles
+     */
     virtual void inject( bnd<unsigned int> range );
 
     __host__
-    void set_udist( UDistribution::Type const & udist, unsigned int seed ) { udist.set(*particles, seed );};
+    /**
+     * @brief Advance particle velocities
+     * 
+     * @param E     Electric field
+     * @param B     Magnetic field
+     */
+    void push( VectorField * const E, VectorField * const B );
 
     __host__
+    /**
+     * @brief Move particles (advance positions) and deposit current
+     * 
+     * @param current   Electric current density
+     */
+    void move( VectorField * const current );
+
+    __host__
+    /**
+     * @brief Move particles (advance positions) without depositing current
+     * 
+     */
+    void move( );
+
+    __host__
+    /**
+     * @brief Advance particles 1 timestep
+     * 
+     * @param emf       EM fields
+     * @param current   Electric current density
+     */
     virtual void advance( EMF const &emf, Current &current );
 
     __host__
+    /**
+     * @brief Deposit species charge
+     * 
+     * @param charge    Charge density grid
+     */
     void deposit_charge( Field &charge ) const;
-
-    __host__
-    void report( const int rep_type, const int2 pha_nx, const float2 pha_range[2]);
 
     __host__
     /**
      * @brief Returns total time centered kinetic energy
-     * 
-     * Note that this will always trigger a reduction operation of the per tile
-     * energy data.
      * 
      * @return double 
      */
@@ -236,28 +385,46 @@ public:
     }
 
     __host__
+    /**
+     * @brief Save particle data to file
+     * 
+     * Saves positions and velocities for all particles. Positions are currently
+     * normalized to cell size
+     */
     void save() const;
 
     __host__
+    /**
+     * @brief Save charge density for species to file
+     * 
+     */
     void save_charge() const;
 
     __host__
+    /**
+     * @brief Save 1D phasespace density to file
+     * 
+     * @param quant     Phasespace quantity
+     * @param range     Value range
+     * @param size      Number of grid points
+     */
     void save_phasespace ( 
         phasespace::quant quant, float2 const range, unsigned size ) const;
 
     __host__
+    /**
+     * @brief Save 2D phasespace density to file
+     * 
+     * @param quant0    axis 0 quantity
+     * @param range0    axis 0 value range
+     * @param size0     axis 0 number of points
+     * @param quant1    axis 1 quantity
+     * @param range1    axis 1 value range
+     * @param size1     axis 1 number of points
+     */
     void save_phasespace ( 
         phasespace::quant quant0, float2 const range0, unsigned size0,
         phasespace::quant quant1, float2 const range1, unsigned size1 ) const;
-
-    __host__
-    void push( VectorField * const E, VectorField * const B );
-
-    __host__
-    void move( VectorField * const current );
-
-    __host__
-    void move( );
 
 };
 

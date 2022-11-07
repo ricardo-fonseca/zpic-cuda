@@ -23,6 +23,110 @@
 #include <cooperative_groups.h>
 namespace cg = cooperative_groups;
 
+
+__host__
+/**
+ * @brief Construct a new Species object
+ * 
+ * @param name  Name for the species object (used for diagnostics)
+ * @param m_q   Mass over charge ratio
+ * @param ppc   Number of particles per cell
+ */
+Species::Species( std::string const name, float const m_q, uint2 const ppc ):
+    name(name), m_q(m_q), ppc(ppc)
+{
+
+    // Validate parameters
+    if ( m_q == 0 ) {
+        std::cerr << "(*error*) Invalid m_q value, must be not 0, aborting...\n";
+        exit(1);
+    }
+
+    if ( ppc.x < 1 || ppc.y < 1 ) {
+        std::cerr << "(*error*) Invalid ppc value, must be >= 1 in all directions\n";
+        exit(1);
+    }
+
+    // Set default parameters
+    density   = new Density::Uniform( 1.0 );
+    udist     = new UDistribution::None();
+    bc        = species::bc_type (species::bc::periodic);
+    push_type = species::boris;
+
+    // Nullify pointers to data structures
+    particles = nullptr;
+    tmp = nullptr;
+    d_energy = nullptr;
+}
+
+
+/**
+ * @brief Initialize data structures
+ * 
+ * @param box       Simulation global box size
+ * @param ntiles    Number of tiles
+ * @param nx        Title grid dimension
+ * @param dt        
+ * @param id 
+ */
+void Species::initialize( float2 const box_, uint2 const ntiles, uint2 const nx,
+    float const dt_, int const id_ ) {
+    
+    // Store simulation box size
+    box = box_;
+
+    // Store simulation time step
+    dt = dt_;
+
+    // Store species id (used by RNG)
+    id = id_;
+
+    // Set charge normalization factor
+    q = copysign( density->get_n0() , m_q ) / (ppc.x * ppc.y);
+    
+    // Set cell size
+    dx.x = box.x / (nx.x * ntiles.x);
+    dx.y = box.y / (nx.y * ntiles.y);
+
+    // Maximum number of particles per tile
+    unsigned int np_max = nx.x * nx.y * ppc.x * ppc.y * 8;
+    
+    particles = new Particles( ntiles, nx, np_max );
+    particles->periodic.x = ( bc.x.lower == species::bc::periodic );
+    particles->periodic.y = ( bc.y.lower == species::bc::periodic );
+
+
+    tmp = new Particles( ntiles, nx, np_max );
+
+    // Initialize energy diagnostic
+    malloc_dev( d_energy, 1 );
+    device::zero( d_energy, 1 );
+
+    // Reset iteration numbers
+    iter = 0;
+
+    // Inject initial distribution
+    inject();
+
+    // Set inital velocity distribution
+    udist -> set( *particles, id );
+}
+
+__host__
+/**
+ * @brief Destroy the Species object
+ * 
+ */
+Species::~Species() {
+    delete( tmp );
+    delete( particles );
+    delete( density );
+    delete( udist );
+
+    free_dev( d_energy );
+};
+
+
 /**
  * @brief Returns reciprocal Lorentz gamma factor
  * 
@@ -38,66 +142,6 @@ float rgamma( const float3 u ) {
 
     // Using CUDA rsqrt and fma intrinsics
     return rsqrtf( fmaf( u.z, u.z, fmaf( u.y, u.y, fmaf( u.x, u.x, 1.0f ) ) ) );
-}
-
-/**
- * @brief Construct a new Species:: Species object
- * 
- * @param name 
- * @param m_q 
- * @param ppc 
- * @param n0
- * @param ufl 
- * @param uth 
- * @param gnx 
- * @param tnx 
- * @param dt 
- */
-Species::Species( std::string const name, float const m_q, 
-        uint2 const ppc, Density::Profile const & density,
-        float2 const box, uint2 const ntiles, uint2 const nx,
-        const float dt ) :
-        name(name), m_q(m_q), ppc(ppc), density(density.clone()), box(box), 
-        dt(dt)
-{
-
-    // Set charge normalization factor
-    q = copysign( density.get_n0() , m_q ) / (ppc.x * ppc.y);
-    
-    // Set cell size
-    dx.x = box.x / (nx.x * ntiles.x);
-    dx.y = box.y / (nx.y * ntiles.y);
-
-    // Maximum number of particles per tile
-    unsigned int np_max = nx.x * nx.y * ppc.x * ppc.y * 8;
-    
-    particles = new Particles( ntiles, nx, np_max );
-    tmp = new Particles( ntiles, nx, np_max );
-
-    // Set default boundary conditions to periodic
-    bc = species::bc_type (species::bc::periodic);
-
-    // Reset iteration numbers
-    iter = 0;
-
-    // Default pusher type
-    push_type = species::boris;
-
-    // Initialize energy diagnostic
-    malloc_dev( d_energy, 1 );
-    device::zero( d_energy, 1 );
-}
-
-/**
- * @brief Destroy the Species:: Species object
- * 
- */
-Species::~Species() {
-    delete( tmp );
-    delete( particles );
-    delete( density );
-
-    free_dev( d_energy );
 }
 
 /**
