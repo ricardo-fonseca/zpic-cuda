@@ -13,16 +13,14 @@ namespace cg=cooperative_groups;
 
 __global__
 void _init_tiles_kernel( 
-    int * const __restrict__ d_tile_offset, 
-    int * const __restrict__ d_tile_np, 
-    int * const __restrict__ d_tile_np2, 
+    t_part_tiles tiles, 
     unsigned int const max_np_tile ) {
 
     const int i = blockIdx.y * gridDim.x + blockIdx.x;
 
-    d_tile_offset[i] = i * max_np_tile;
-    d_tile_np[i]  = 0;
-    d_tile_np2[i] = 0;
+    tiles.offset[i] = i * max_np_tile;
+    tiles.np[i]  = 0;
+    tiles.np2[i] = 0;
 }
 
 /**
@@ -45,12 +43,12 @@ Particles::Particles(uint2 const ntiles, uint2 const nx, unsigned int const max_
 
     // Allocate tile information array on device and initialize using a CUDA kernel
 
-    malloc_dev( tile_offset, ntiles.x * ntiles.y );
-    malloc_dev( tile_np, ntiles.x * ntiles.y );
-    malloc_dev( tile_np2, ntiles.x * ntiles.y );
+    malloc_dev( tiles.offset, ntiles.x * ntiles.y );
+    malloc_dev( tiles.np, ntiles.x * ntiles.y );
+    malloc_dev( tiles.np2, ntiles.x * ntiles.y );
 
     dim3 grid( ntiles.x, ntiles.y );
-    _init_tiles_kernel <<< grid, 1 >>> ( tile_offset, tile_np, tile_np2, max_np_tile );
+    _init_tiles_kernel <<< grid, 1 >>> ( tiles, max_np_tile );
 };
 
 
@@ -64,7 +62,8 @@ __global__
  * @param ntiles    total number of tiles
  * @param total     (out) total number of particles
  */
-void _np_kernel( int const * const __restrict__ d_tile_np, 
+void _np_kernel( 
+    int const * const __restrict__ d_tile_np, 
     unsigned int const ntiles, unsigned int * const __restrict__ total) {
     auto group = cg::this_thread_block();
     auto warp  = cg::tiled_partition<32>(group);
@@ -88,7 +87,7 @@ unsigned int Particles::np() {
     auto size = ntiles.x*ntiles.y;
     auto block = ( size < 1024 ) ? size : 1024 ;
     auto grid = (size-1)/block + 1;
-    _np_kernel <<< grid, block >>> ( tile_np, size, _dev_tmp_uint.ptr() );
+    _np_kernel <<< grid, block >>> ( tiles.np, size, _dev_tmp_uint.ptr() );
     return _dev_tmp_uint.get();
 }
 
@@ -119,19 +118,19 @@ unsigned int Particles::np_max_tile() {
     auto size = ntiles.x*ntiles.y;
     auto block = ( size < 1024 ) ? size : 1024 ;
     auto grid = (size-1)/block + 1;
-    _np_max_tile <<< grid, block >>> ( tile_np, size, _dev_tmp_uint.ptr() );
+    _np_max_tile <<< grid, block >>> ( tiles.np, size, _dev_tmp_uint.ptr() );
     return _dev_tmp_uint.get();
 }
 
 __global__
-void _np_min_tile( int const * const __restrict__ d_tile_np, 
+void _np_min_tile( int const * const __restrict__ d_tiles_np, 
     unsigned int const ntiles, unsigned int * const __restrict__ max) {
     auto group = cg::this_thread_block();
     auto warp  = cg::tiled_partition<32>(group);
 
     unsigned int v = 0;
     for( int i = group.thread_rank(); i < ntiles; i += group.num_threads() ) {
-        int tile_np = d_tile_np[i];
+        int tile_np = d_tiles_np[i];
         if ( tile_np > v ) v = tile_np;
     }
     
@@ -150,14 +149,14 @@ unsigned int Particles::np_min_tile() {
     auto size = ntiles.x*ntiles.y;
     auto block = ( size < 1024 ) ? size : 1024 ;
     auto grid = (size-1)/block + 1;
-    _np_max_tile <<< grid, block >>> ( tile_np, size, _dev_tmp_uint.ptr() );
+    _np_max_tile <<< grid, block >>> ( tiles.np, size, _dev_tmp_uint.ptr() );
     return _dev_tmp_uint.get();
 }
 
 __global__
 void _np_exscan_kernel( 
     unsigned int * const __restrict__ idx,
-    int const * const __restrict__ d_tile_np, unsigned int const ntiles,
+    int const * const __restrict__ d_tiles_np, unsigned int const ntiles,
     unsigned int * const __restrict__ total) {
 
     __shared__ unsigned int tmp[ 32 ];
@@ -169,7 +168,7 @@ void _np_exscan_kernel(
     prev = 0;
 
     for( unsigned int i = block.thread_rank(); i < ntiles; i += block.num_threads() ) {
-        unsigned int s = d_tile_np[i];
+        unsigned int s = d_tiles_np[i];
 
         unsigned int v = cg::exclusive_scan( warp, s, cg::plus<unsigned int>());
         if ( warp.thread_rank() == warp.num_threads() - 1 ) tmp[ warp.meta_group_rank() ] = v + s;
@@ -207,7 +206,7 @@ unsigned int Particles::np_exscan( unsigned int * __restrict__ d_offset ) {
     auto size = ntiles.x*ntiles.y;
     auto block = ( size < 1024 ) ? size : 1024 ;
     _dev_tmp_uint = 0;
-    _np_exscan_kernel <<< 1, block >>> ( d_offset, tile_np, size, _dev_tmp_uint.ptr() );
+    _np_exscan_kernel <<< 1, block >>> ( d_offset, tiles.np, size, _dev_tmp_uint.ptr() );
     return _dev_tmp_uint.get();
 }
 
@@ -229,16 +228,15 @@ void _gather_quant(
     int2 const * const __restrict__ d_ix, 
     float2 const * const __restrict__ d_x, 
     float3 const * const __restrict__ d_u, 
-    int const * const __restrict__ d_tile_offset, 
-    int const * const __restrict__ d_tile_np, 
+    t_part_tiles tiles,
     uint2 const tile_nx,
     unsigned int const * const __restrict__ d_out_offset, 
     float * const __restrict__ d_data )
 {    
     const int tid = blockIdx.y * gridDim.x + blockIdx.x;
 
-    const int offset = d_tile_offset[tid];
-    const int np     = d_tile_np[tid];
+    const int offset = tiles.offset[tid];
+    const int np     = tiles.np[tid];
 
     int2   __restrict__ const * const ix = &d_ix[ offset ];
     float2 __restrict__ const * const x  = &d_x[ offset ];
@@ -278,19 +276,19 @@ void Particles::gather( part::quant quant, float * const __restrict__ h_data,
         // Gather data on device
         switch (quant) {
         case part::x : 
-            _gather_quant<part::x> <<<grid,block>>>( ix, x, u, tile_offset, tile_np, nx, d_out_offset, d_data );
+            _gather_quant<part::x> <<<grid,block>>>( ix, x, u, tiles, nx, d_out_offset, d_data );
             break;
         case part::y:
-            _gather_quant<part::y> <<<grid,block>>>( ix, x, u, tile_offset, tile_np, nx, d_out_offset, d_data );
+            _gather_quant<part::y> <<<grid,block>>>( ix, x, u, tiles, nx, d_out_offset, d_data );
             break;
         case part::ux:
-            _gather_quant<part::ux> <<<grid,block>>>( ix, x, u, tile_offset, tile_np, nx, d_out_offset, d_data );
+            _gather_quant<part::ux> <<<grid,block>>>( ix, x, u, tiles, nx, d_out_offset, d_data );
             break;
         case part::uy:
-            _gather_quant<part::uy> <<<grid,block>>>( ix, x, u, tile_offset, tile_np, nx, d_out_offset, d_data );
+            _gather_quant<part::uy> <<<grid,block>>>( ix, x, u, tiles, nx, d_out_offset, d_data );
             break;
         case part::uz:
-            _gather_quant<part::uz> <<<grid,block>>>( ix, x, u, tile_offset, tile_np, nx, d_out_offset, d_data );
+            _gather_quant<part::uz> <<<grid,block>>>( ix, x, u, tiles, nx, d_out_offset, d_data );
             break;
         }
 
@@ -396,9 +394,9 @@ void Particles::save( zdf::part_info &info, zdf::iteration &iter, std::string pa
 template < coord::cart dir >
 __global__
 void _bnd_out( int const lim, 
-    int * const __restrict__ d_tile_np, int * const __restrict__ d_tile_offset,
+    t_part_tiles tiles,
     int2 * __restrict__ d_ix, float2 * __restrict__ d_x, float3 * __restrict__ d_u, int * __restrict__ d_idx,
-    int * const __restrict__ d_tmp_tile_np, int * const __restrict__ d_tmp_tile_offset, int * const __restrict__ d_tmp_tile_np2, 
+    t_part_tiles tmp, 
     int2 * __restrict__ tmp_d_ix, float2 * __restrict__ tmp_d_x, float3 * __restrict__ tmp_d_u )
 {
     auto block = cg::this_thread_block();
@@ -406,15 +404,15 @@ void _bnd_out( int const lim,
 
     const int tid = blockIdx.y * gridDim.x + blockIdx.x;
 
-    unsigned int const np = d_tile_np[ tid ];
-    unsigned int const offset =  d_tile_offset[ tid ];
+    unsigned int const np = tiles.np[ tid ];
+    unsigned int const offset =  tiles.offset[ tid ];
     int2   * __restrict__ ix  = &d_ix[ offset ];
     float2 * __restrict__ x   = &d_x[ offset ];
     float3 * __restrict__ u   = &d_u[ offset ];
 
     int * __restrict__ idx = &d_idx[ offset ];
 
-    unsigned int const tmp_offset =  d_tmp_tile_offset[ tid ];
+    unsigned int const tmp_offset =  tmp.offset[ tid ];
     int2   * __restrict__ tmp_ix = &tmp_d_ix[ tmp_offset ];
     float2 * __restrict__ tmp_x  = &tmp_d_x[ tmp_offset ];
     float3 * __restrict__ tmp_u  = &tmp_d_u[ tmp_offset ];
@@ -507,9 +505,9 @@ void _bnd_out( int const lim,
 
     // Store new values on tile information
     if ( block.thread_rank() == 0 ) {
-        d_tile_np[ tid ]         = _n0;
-        d_tmp_tile_np[ tid ]     = _n1;
-        d_tmp_tile_np2[ tid ]    = _n2;
+        tiles.np[ tid ]  = _n0;
+        tmp.np[ tid ]    = _n1;
+        tmp.np2[ tid ]   = _n2;
     }
 
 }
@@ -533,9 +531,9 @@ void _bnd_out( int const lim,
 template < coord::cart dir > 
 __global__
 void _bnd_in( int const lim,
-    int * const __restrict__ d_tile_np, int * const __restrict__ d_tile_offset,
+    t_part_tiles tiles,
     int2 * __restrict__ d_ix, float2 * __restrict__ d_x, float3 * __restrict__ d_u,
-    int * const __restrict__ d_tmp_tile_np, int * const __restrict__ d_tmp_tile_offset, int * const __restrict__ d_tmp_tile_np2,
+    t_part_tiles tmp,
     int2 * __restrict__ tmp_d_ix, float2 * __restrict__ tmp_d_x, float3 * __restrict__ tmp_d_u,
     int const periodic )
 {
@@ -545,8 +543,8 @@ void _bnd_in( int const lim,
 
     const int tid = blockIdx.y * gridDim.x + blockIdx.x;
 
-    unsigned int n0  = d_tile_np[ tid ];
-    const int offset =  d_tile_offset[ tid ];
+    unsigned int n0  = tiles.np[ tid ];
+    const int offset =  tiles.offset[ tid ];
     int2   __restrict__ *ix = &d_ix[ offset ];
     float2 __restrict__ *x  = &d_x[ offset ];
     float3 __restrict__ *u  = &d_u[ offset ];
@@ -581,8 +579,8 @@ void _bnd_in( int const lim,
 
         int uid = y_ucoord * gridDim.x + x_ucoord;
 
-        unsigned int nu = d_tmp_tile_np[ uid ];
-        const int upper_offset =  d_tmp_tile_offset[ uid ];
+        unsigned int nu = tmp.np[ uid ];
+        const int upper_offset =  tmp.offset[ uid ];
         int2   __restrict__ *upper_ix = &tmp_d_ix[ upper_offset ];
         float2 __restrict__ *upper_x  = &tmp_d_x[ upper_offset ];
         float3 __restrict__ *upper_u  = &tmp_d_u[ upper_offset ];
@@ -607,9 +605,9 @@ void _bnd_in( int const lim,
 
         int lid = y_lcoord * gridDim.x + x_lcoord;;
         
-        unsigned int k  = d_tmp_tile_np[ lid ];
-        unsigned int nl = d_tmp_tile_np2[ lid ];
-        const int lower_offset =  d_tmp_tile_offset[ lid ];
+        unsigned int k  = tmp.np[ lid ];
+        unsigned int nl = tmp.np2[ lid ];
+        const int lower_offset =  tmp.offset[ lid ];
         int2   __restrict__ *lower_ix = &tmp_d_ix[ lower_offset ];
         float2 __restrict__ *lower_x  = &tmp_d_x[ lower_offset ];
         float3 __restrict__ *lower_u  = &tmp_d_u[ lower_offset ];
@@ -627,7 +625,7 @@ void _bnd_in( int const lim,
         n0 += nl;
     }
 
-    if ( block.thread_rank() == 0 ) d_tile_np[ tid ] = n0;
+    if ( block.thread_rank() == 0 ) tiles.np[ tid ] = n0;
 }
 
 /**
@@ -646,29 +644,29 @@ void Particles::tile_sort( Particles &tmp ) {
     dim3 block( 1024 );
 
     _bnd_out< coord::x > <<< grid, block >>> ( 
-        nx.x, tile_np, tile_offset,
+        nx.x, tiles,
         ix, x, u, idx,
-        tmp.tile_np, tmp.tile_offset, tmp.tile_np2,
+        tmp.tiles,
         tmp.ix, tmp.x, tmp.u
     );
 
     _bnd_in< coord::x >  <<< grid, block >>> ( 
-        nx.x, tile_np, tile_offset, ix, x, u,
-        tmp.tile_np, tmp.tile_offset, tmp.tile_np2, tmp.ix, tmp.x, tmp.u,
+        nx.x, tiles, ix, x, u,
+        tmp.tiles, tmp.ix, tmp.x, tmp.u,
         periodic.x
     );
 
     _bnd_out< coord::y > <<< grid, block >>> ( 
-        nx.y, tile_np, tile_offset,
+        nx.y, tiles,
         ix, x, u, idx,
-        tmp.tile_np, tmp.tile_offset, tmp.tile_np2,
+        tmp.tiles,
         tmp.ix, tmp.x, tmp.u
      );
 
     _bnd_in< coord::y >  <<< grid, block >>> ( 
-        nx.y, tile_np, tile_offset,
+        nx.y, tiles,
         ix, x, u,
-        tmp.tile_np, tmp.tile_offset, tmp.tile_np2, tmp.ix, tmp.x, tmp.u,
+        tmp.tiles, tmp.ix, tmp.x, tmp.u,
         periodic.y
     );
 
@@ -691,14 +689,14 @@ void Particles::tile_sort() {
 }
 
 __global__
-void _cell_shift( int * __restrict__ d_tile_np, int * __restrict__ d_tile_offset, 
+void _cell_shift( t_part_tiles tiles, 
     int2 * const __restrict__ d_ix,
     int2 const shift )
 {
     int const tid = blockIdx.y * gridDim.x + blockIdx.x;
 
-    int const offset = d_tile_offset[ tid ];
-    int const np     = d_tile_np[ tid ];
+    int const offset = tiles.offset[ tid ];
+    int const np     = tiles.np[ tid ];
     int2 * const __restrict__ ix = &d_ix[ offset ];
 
     for( int i = threadIdx.x; i < np; i += blockDim.x) {
@@ -725,7 +723,7 @@ void Particles::cell_shift( int2 const shift ) {
     dim3 grid( ntiles.x, ntiles.y );
     dim3 block( 1024 );
 
-    _cell_shift <<< grid, block >>> ( tile_np, tile_offset, ix, shift );
+    _cell_shift <<< grid, block >>> ( tiles, ix, shift );
 }
 
 #define __ULIM __FLT_MAX__
@@ -753,8 +751,7 @@ __global__
  * @param out 
  */
 void _validate( 
-    int const * const __restrict__ d_tile_np, 
-    int const * const __restrict__ d_tile_offset, 
+    t_part_tiles tiles, 
     int2   const * const __restrict__ d_ix,
     float2 const * const __restrict__ d_x,
     float3 const * const __restrict__ d_u,
@@ -762,8 +759,8 @@ void _validate(
 
     int const tid = blockIdx.y * gridDim.x + blockIdx.x;
 
-    int const offset = d_tile_offset[ tid ];
-    int const np     = d_tile_np[ tid ];
+    int const offset = tiles.offset[ tid ];
+    int const np     = tiles.np[ tid ];
     int2   const * const __restrict__ ix = &d_ix[ offset ];
     float2 const * const __restrict__ x  = &d_x[ offset ];
     float3 const * const __restrict__ u  = &d_u[ offset ];
@@ -818,8 +815,7 @@ void _validate(
 template < coord::cart dir >
 __global__
 void _validate_dir( 
-    int    const * const __restrict__ d_tile_np, 
-    int    const * const __restrict__ d_tile_offset, 
+    t_part_tiles tiles, 
     int2   const * const __restrict__ d_ix,
     float2 const * const __restrict__ d_x,
     float3 const * const __restrict__ d_u,
@@ -827,8 +823,8 @@ void _validate_dir(
 
     int const tid = blockIdx.y * gridDim.x + blockIdx.x;
 
-    int const offset = d_tile_offset[ tid ];
-    int const np     = d_tile_np[ tid ];
+    int const offset = tiles.offset[ tid ];
+    int const np     = tiles.np[ tid ];
     int2   const * const __restrict__ ix = &d_ix[ offset ];
     float2 const * const __restrict__ x  = &d_x[ offset ];
     float3 const * const __restrict__ u  = &d_u[ offset ];
@@ -901,7 +897,7 @@ void Particles::validate( std::string msg, int const over ) {
     dim3 grid( ntiles.x, ntiles.y );
     dim3 block( 32 );
 
-    _validate <<< grid, block >>> ( tile_np, tile_offset, ix, x, u, nx, over, _dev_tmp_uint.ptr() );
+    _validate <<< grid, block >>> ( tiles, ix, x, u, nx, over, _dev_tmp_uint.ptr() );
 
     unsigned int nerr = _dev_tmp_uint.get();
     if ( nerr > 0 ) {
@@ -928,7 +924,7 @@ void Particles::check_tiles() {
     int * h_tile_np;
     malloc_host( h_tile_np, ntiles.x * ntiles.y );
 
-    devhost_memcpy( h_tile_np, tile_np, ntiles.x * ntiles.y );
+    devhost_memcpy( h_tile_np, tiles.np, ntiles.x * ntiles.y );
 
     int np = 0;
     int max = 0;

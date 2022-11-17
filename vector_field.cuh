@@ -38,13 +38,7 @@ class VectorField {
      * @return int       Returns 0 on success, -1 on error
      */
     __host__ int zero() {
-        size_t size = buffer_size( ) * sizeof(float3);
-        auto err = cudaMemsetAsync( d_buffer, 0, size );
-        if ( err != cudaSuccess ) {
-            std::cerr << "(*error*) Unable to zero device memory for tiled grid." << std::endl;
-            std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
-            return -1;
-        }
+        device::zero( d_buffer, buffer_size() );
         return 0;
     }
 

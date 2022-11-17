@@ -194,8 +194,7 @@ void _inject_cathode_lower(
     float * const d_inj_pos, float const ufl,
     float3 uth, uint2 seed,  uint2 const ppc,
     uint2 const ntiles, uint2 const nx, 
-    int * const __restrict__ d_tile_np,
-    int * const __restrict__ d_tile_offset,
+    t_part_tiles tiles,
     int2 * __restrict__ d_ix, float2 * __restrict__ d_x, float3 * __restrict__ d_u )
 {
     auto block = cg::this_thread_block();
@@ -210,12 +209,12 @@ void _inject_cathode_lower(
     double norm;
     rand_init( seed, state, norm );
 
-    const int offset =  d_tile_offset[ tid ];
+    const int offset =  tiles.offset[ tid ];
     int2   * __restrict__ const ix = &d_ix[ offset ];
     float2 * __restrict__ const x  = &d_x[ offset ];
     float3 * __restrict__ const u  = &d_u[ offset ];
 
-    int np = d_tile_np[ tid ];
+    int np = tiles.np[ tid ];
 
     // Advance injection positions and count number of particles to inject
 
@@ -268,7 +267,7 @@ void _inject_cathode_lower(
 
     // Update global number of particles in tile
     if ( threadIdx.x == 0 )
-        d_tile_np[ tid ] += nx.y * inj_np * ppc.y;
+        tiles.np[ tid ] += nx.y * inj_np * ppc.y;
 }
 
 __global__
@@ -291,8 +290,7 @@ void _inject_cathode_upper(
     float * const d_inj_pos, float const ufl,
     float3 uth, uint2 seed,  uint2 const ppc,
     uint2 const ntiles, uint2 const nx, 
-    int * const __restrict__ d_tile_np,
-    int * const __restrict__ d_tile_offset,
+    t_part_tiles tiles,
     int2 * __restrict__ d_ix, float2 * __restrict__ d_x, float3 * __restrict__ d_u )
 {
     auto block = cg::this_thread_block();
@@ -307,12 +305,12 @@ void _inject_cathode_upper(
     double norm;
     rand_init( seed, state, norm );
 
-    const int offset =  d_tile_offset[ tid ];
+    const int offset =  tiles.offset[ tid ];
     int2   * __restrict__ const ix = &d_ix[ offset ];
     float2 * __restrict__ const x  = &d_x[ offset ];
     float3 * __restrict__ const u  = &d_u[ offset ];
 
-    int np = d_tile_np[ tid ];
+    int np = tiles.np[ tid ];
 
     // Advance injection positions and count number of particles to inject
 
@@ -365,7 +363,7 @@ void _inject_cathode_upper(
 
     // Update global number of particles in tile
     if ( threadIdx.x == 0 )
-        d_tile_np[ tid ] += nx.y * inj_np * ppc.y;
+        tiles.np[ tid ] += nx.y * inj_np * ppc.y;
 }
 
 /**
@@ -399,7 +397,7 @@ void Cathode::advance( EMF const &emf, Current &current )
             _inject_cathode_lower <<< grid, block, shm_size >>> (
                 d_inj_pos, ufl, uth, rnd_seed, ppc, 
                 particles -> ntiles, particles -> nx,
-                particles -> tile_np, particles -> tile_offset, 
+                particles -> tiles, 
                 particles -> ix, particles -> x, particles -> u
             );
             break;
@@ -410,7 +408,7 @@ void Cathode::advance( EMF const &emf, Current &current )
             _inject_cathode_upper <<< grid, block, shm_size >>> (
                 d_inj_pos, ufl, uth, rnd_seed, ppc, 
                 particles -> ntiles, particles -> nx, 
-                particles -> tile_np, particles -> tile_offset, 
+                particles -> tiles, 
                 particles -> ix, particles -> x, particles -> u
             );
             break;

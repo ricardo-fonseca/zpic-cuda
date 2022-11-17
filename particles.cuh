@@ -36,9 +36,8 @@ class Particles {
     float3 *u;
     int *idx;
 
-    int * tile_np;
-    int * tile_offset;
-    int * tile_np2;
+    t_part_tiles tiles;
+
 
     __host__
     Particles( uint2 const ntiles, uint2 const nx, unsigned int const max_np_tile );
@@ -48,8 +47,11 @@ class Particles {
         free_dev( u );
         free_dev( x );
         free_dev( ix );
-
         free_dev( idx );
+
+        free_dev( tiles.np );
+        free_dev( tiles.offset );
+        free_dev( tiles.np2 );
     }
 
     /**

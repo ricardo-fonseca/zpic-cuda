@@ -17,9 +17,7 @@ __global__
  */
 void _inject_uniform_kernel( bnd<unsigned int> range,
     uint2 const ppc, uint2 const nx, 
-    int * const __restrict__ d_tile_np,
-    int * const __restrict__ d_tile_offset,
-    int * const __restrict__ d_tile_np2,
+    t_part_tiles tiles,
     int2 * __restrict__ d_ix, float2 * __restrict__ d_x, float3 * __restrict__ d_u )
 {
 
@@ -29,9 +27,9 @@ void _inject_uniform_kernel( bnd<unsigned int> range,
     int const tid = blockIdx.y * gridDim.x + blockIdx.x;
 
     // Store number of particles before injection
-    const int np = d_tile_np[ tid ];
+    const int np = tiles.np[ tid ];
     if ( block.thread_rank() == 0 ) {
-        d_tile_np2[ tid ] = np;
+        tiles.np2[ tid ] = np;
     }
     block.sync();
 
@@ -59,7 +57,7 @@ void _inject_uniform_kernel( bnd<unsigned int> range,
         int const row = (ri1-ri0+1);
         int const vol = (rj1-rj0+1) * row;
 
-        const int offset =  d_tile_offset[ tid ];
+        const int offset =  tiles.offset[ tid ];
         int2   * __restrict__ const ix = &d_ix[ offset ];
         float2 * __restrict__ const x  = &d_x[ offset ];
         float3 * __restrict__ const u  = &d_u[ offset ];
@@ -94,7 +92,7 @@ void _inject_uniform_kernel( bnd<unsigned int> range,
 
         // Update global number of particles in tile
         if ( block.thread_rank() == 0 )
-            d_tile_np[ tid ] = np + vol * np_cell ;
+            tiles.np[ tid ] = np + vol * np_cell ;
     }
 }
 
@@ -106,7 +104,7 @@ void Density::Uniform::inject( Particles * part,
 
     _inject_uniform_kernel <<< grid, block >>> ( 
             range, ppc, part -> nx, 
-            part -> tile_np, part -> tile_offset, part -> tile_np2,
+            part -> tiles,
             part -> ix, part -> x, part -> u );
 }
 
@@ -129,9 +127,7 @@ template < coord::cart dir >
 __global__
 void _inject_step_kernel( bnd<unsigned int> range,
     const float step, const uint2 ppc, const uint2 nx,
-    int * const __restrict__ d_tile_np,
-    int * const __restrict__ d_tile_offset,
-    int * const __restrict__ d_tile_np2,
+    t_part_tiles tiles,
     int2* __restrict__ d_ix, float2* __restrict__ d_x, float3* __restrict__ d_u )
 {
 
@@ -143,8 +139,8 @@ void _inject_step_kernel( bnd<unsigned int> range,
     // Store number of particles before injection
     __shared__ int np;
     if ( block.thread_rank() == 0 ) {
-        np = d_tile_np[ tid ];
-        d_tile_np2[ tid ] = np;
+        np = tiles.np[ tid ];
+        tiles.np2[ tid ] = np;
     }
     block.sync();
 
@@ -172,7 +168,7 @@ void _inject_step_kernel( bnd<unsigned int> range,
         int const row = (ri1-ri0+1);
         int const vol = (rj1-rj0+1) * row;
 
-        const int offset =  d_tile_offset[ tid ];
+        const int offset =  tiles.offset[ tid ];
         int2   __restrict__ *ix = &d_ix[ offset ];
         float2 __restrict__ *x  = &d_x[ offset ];
         float3 __restrict__ *u  = &d_u[ offset ];
@@ -210,7 +206,7 @@ void _inject_step_kernel( bnd<unsigned int> range,
         block.sync();
 
         if ( block.thread_rank() == 0 )
-            d_tile_np[ tid ] = np;
+            tiles.np[ tid ] = np;
     }
 }
 
@@ -226,13 +222,13 @@ void Density::Step::inject( Particles * part,
     case( coord::x ):
         _inject_step_kernel <coord::x> <<< grid, block >>> (
             range, step_pos, ppc, part -> nx, 
-            part -> tile_np, part -> tile_offset, part -> tile_np2,
+            part -> tiles,
             part -> ix, part -> x, part -> u );
         break;
     case( coord::y ):
         _inject_step_kernel <coord::y> <<< grid, block >>> (
             range, step_pos, ppc, part -> nx, 
-            part -> tile_np, part -> tile_offset, part -> tile_np2,
+            part -> tiles,
             part -> ix, part -> x, part -> u );
         break;
     break;
@@ -257,9 +253,7 @@ template < coord::cart dir >
 __global__
 void _inject_slab_kernel( bnd<unsigned int> range,
     const float start, const float finish, uint2 ppc, uint2 nx,
-    int * const __restrict__ d_tile_np,
-    int * const __restrict__ d_tile_offset,
-    int * const __restrict__ d_tile_np2,
+    t_part_tiles tiles,
     int2* __restrict__ d_ix, float2* __restrict__ d_x, float3* __restrict__ d_u )
 {
     auto block = cg::this_thread_block();
@@ -270,8 +264,8 @@ void _inject_slab_kernel( bnd<unsigned int> range,
     // Store number of particles before injection
     __shared__ int np;
     if ( block.thread_rank() == 0 ) {
-        np = d_tile_np[ tid ];
-        d_tile_np2[ tid ] = np;
+        np = tiles.np[ tid ];
+        tiles.np2[ tid ] = np;
     }
     block.sync();
 
@@ -299,7 +293,7 @@ void _inject_slab_kernel( bnd<unsigned int> range,
         int const row = (ri1-ri0+1);
         int const vol = (rj1-rj0+1) * row;
 
-        const int offset =  d_tile_offset[ tid ];
+        const int offset =  tiles.offset[ tid ];
         int2   __restrict__ *ix = &d_ix[ offset ];
         float2 __restrict__ *x  = &d_x[ offset ];
         float3 __restrict__ *u  = &d_u[ offset ];
@@ -337,7 +331,7 @@ void _inject_slab_kernel( bnd<unsigned int> range,
         block.sync();
 
         if ( block.thread_rank() == 0 )
-            d_tile_np[ tid ] = np;
+            tiles.np[ tid ] = np;
     }
 }
 
@@ -355,13 +349,13 @@ void Density::Slab::inject( Particles * part,
     case( coord::x ):
         _inject_slab_kernel < coord::x > <<< grid, block >>> (
             range, slab_begin, slab_end, ppc, part -> nx, 
-            part -> tile_np, part -> tile_offset, part -> tile_np2,
+            part -> tiles,
             part -> ix, part -> x, part -> u  );
         break;
     case( coord::y ):
         _inject_slab_kernel < coord::y > <<< grid, block >>> (
             range, slab_begin, slab_end, ppc, part -> nx, 
-            part -> tile_np, part -> tile_offset, part -> tile_np2,
+            part -> tiles,
             part -> ix, part -> x, part -> u  );
         break;
     }
@@ -387,9 +381,7 @@ void Density::Slab::inject( Particles * part,
 __global__
 void _inject_sphere_kernel( bnd<unsigned int> range,
     float2 center, float radius, float2 dx, uint2 ppc, uint2 nx,
-    int * const __restrict__ d_tile_np,
-    int * const __restrict__ d_tile_offset,
-    int * const __restrict__ d_tile_np2,
+    t_part_tiles tiles,
     int2* __restrict__ d_ix, float2* __restrict__ d_x, float3* __restrict__ d_u )
 {
 
@@ -401,8 +393,8 @@ void _inject_sphere_kernel( bnd<unsigned int> range,
     // Store number of particles before injection
     __shared__ int np;
     if ( block.thread_rank() == 0 ) {
-        np = d_tile_np[ tid ];
-        d_tile_np2[ tid ] = np;
+        np = tiles.np[ tid ];
+        tiles.np2[ tid ] = np;
     }
     block.sync();
 
@@ -431,7 +423,7 @@ void _inject_sphere_kernel( bnd<unsigned int> range,
         int const row = (ri1-ri0+1);
         int const vol = (rj1-rj0+1) * row;
 
-        const int offset =  d_tile_offset[ tid ];
+        const int offset =  tiles.offset[ tid ];
         int2   __restrict__ *ix = &d_ix[ offset ];
         float2 __restrict__ *x  = &d_x[ offset ];
         float3 __restrict__ *u  = &d_u[ offset ];
@@ -469,7 +461,7 @@ void _inject_sphere_kernel( bnd<unsigned int> range,
 
         block.sync();
         if ( block.thread_rank() == 0 )
-            d_tile_np[ tid ] = np;
+            tiles.np[ tid ] = np;
     }
 }
 
@@ -485,6 +477,6 @@ void Density::Sphere::inject( Particles * part,
 
     _inject_sphere_kernel <<< grid, block >>> (
         range, sphere_center, radius, dx, ppc, part -> nx, 
-        part -> tile_np, part -> tile_offset, part -> tile_np2,
+        part -> tiles,
         part -> ix, part -> x, part -> u  );
 }
