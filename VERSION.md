@@ -9,7 +9,7 @@
 
 * Adds performance measurements
 * Adds "frozen" (0 temperature, 0 fluid velocity) test
-* Adds new particle tile sorter using a temporary buffer for storing the indices
+* Implements new particle tile sorter using a temporary buffer for storing the indices
   of particles moving from tile
 
 ## 2022.11.7
