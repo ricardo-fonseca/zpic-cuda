@@ -8,26 +8,13 @@ namespace part {
     enum quant { x, y, ux, uy, uz };
 }
 
-/**
- * @brief Information on a single particle tile
- * 
- */
-typedef struct ParticlesTile {
+typedef struct ParticlesTiles {
 
-    // Tile ID
-    uint2 tile;
+    int * np;
+    int * offset;
+    int * np2;
 
-    // Position on global buffer
-    unsigned int pos;
-
-    // Number of particles
-    unsigned int n;
-
-    // Number of particles (b)
-    // Used when 2 different sets are in the same buffer
-    unsigned int nb;
-
-} t_part_tile;
+} t_part_tiles;
 
 class Particles {
     
@@ -47,10 +34,11 @@ class Particles {
     int2 *ix;
     float2 *x;
     float3 *u;
-
     int *idx;
 
-    t_part_tile *tiles;
+    int * tile_np;
+    int * tile_offset;
+    int * tile_np2;
 
     __host__
     Particles( uint2 const ntiles, uint2 const nx, unsigned int const max_np_tile );
