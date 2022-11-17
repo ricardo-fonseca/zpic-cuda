@@ -146,6 +146,17 @@ class Simulation {
         double total = part_ene + ene_E.x + ene_E.y + ene_E.z + ene_B.x + ene_B.y + ene_B.z;
         std::cout << "(*info*) total = " << total << "\n";
     }
+
+    /**
+     * @brief Returns total number of particles moved
+     * 
+     * @return unsigned long long 
+     */
+    auto get_nmove() {
+        unsigned long long nmove = 0;
+        for (int i = 0; i < species.size(); i++) nmove += species[i] -> get_nmove();
+        return nmove;
+    }
 };
 
 

@@ -115,6 +115,9 @@ private:
     /// @brief Total species energy on device
     double *d_energy;
 
+    /// @brief Total number of particles moved
+    unsigned long long *d_nmove;
+
     __host__
     /**
      * @brief Process (physical) boundary conditions
@@ -271,10 +274,12 @@ public:
         // Store new values
         bc = new_bc;
 
+/*
         std::string bc_name[] = {"open", "periodic", "reflecting"};
         std::cout << "(*info*) Species " << name << " boundary conditions\n";
         std::cout << "(*info*) x : [ " << bc_name[ bc.x.lower ] << ", " << bc_name[ bc.x.upper ] << " ]\n";
         std::cout << "(*info*) y : [ " << bc_name[ bc.y.lower ] << ", " << bc_name[ bc.y.upper ] << " ]\n";
+*/
 
         // Set periodic flags on tile grids
         if ( particles ) {
@@ -382,6 +387,30 @@ public:
 
         // Normalize and return
         return h_energy * q * m_q * dx.x * dx.y;
+    }
+
+    __host__
+    /**
+     * @brief Returns total number of particles moved
+     * 
+     * @return unsigned long long 
+     */
+    unsigned long long get_nmove() const {
+        // Get total number of pushes from device memory
+        unsigned long long h_nmove;
+        devhost_memcpy( &h_nmove, d_nmove, 1 );
+
+        return h_nmove;
+    }
+
+    __host__
+    /**
+     * @brief Returns the maximum number of particles per tile
+     * 
+     * @return auto 
+     */
+    auto np_max_tile() const {
+        return particles -> np_max_tile();
     }
 
     __host__

@@ -224,6 +224,7 @@ void test_weibel() {
     sim.emf -> save( emf::b, fcomp::z );
 
     printf("Elapsed time was: %.3f s\n", timer.elapsed( timer::s ));
+    std::cout << "Performance: " << sim.get_nmove() / timer.elapsed( timer::s ) / 1.e9 << " GPart/s\n";
 }
 
 void test_lwfa() {
@@ -377,6 +378,8 @@ void test_mushroom() {
 
 
     printf("Elapsed time was: %.3f s\n", timer.elapsed( timer::s ));
+    std::cout << "Performance: " << sim.get_nmove() / timer.elapsed( timer::s ) / 1.e9 << " GPart/s\n";
+
 }
 
 
@@ -468,6 +471,8 @@ void test_kh() {
 
 
     printf("Elapsed time was: %.3f s\n", timer.elapsed( timer::s ));
+    std::cout << "Performance: " << sim.get_nmove() / timer.elapsed( timer::s ) / 1.e9 << " GPart/s\n";
+
 }
 
 void test_bcemf() {
@@ -651,7 +656,45 @@ void test_cathode() {
     timer.stop();
 
     printf("Elapsed time: %.3f ms\n", timer.elapsed());
+
+    std::cout << "Performance: " << sim.get_nmove() / timer.elapsed( timer::s ) / 1.e9 << " GPart/s\n";
+
 }
+
+void test_frozen() {
+
+    Simulation sim( 
+        make_uint2( 16, 16 ),       // ntiles
+        make_uint2( 16, 16 ),       // nx
+        make_float2( 25.6, 25.6 ),  // box
+        0.07                        // dt
+    );
+
+    // Create cathode
+    Species electrons( "electrons", -1.0f, make_uint2( 8, 8 ) );
+    sim.add_species( electrons );
+
+    float const tmax = 51.2 ;
+
+    printf("Running frozen test up to t = %g...\n", tmax );
+
+    Timer timer;
+    timer.start();
+
+    while( sim.get_t() < tmax ) {
+        sim.advance(); 
+    }
+
+    printf("Simulation complete at t = %g\n", sim.get_t());
+
+    timer.stop();
+
+    printf("Elapsed time: %.3f ms\n", timer.elapsed());
+
+    std::cout << "Performance: " << sim.get_nmove() / timer.elapsed( timer::s ) / 1.e9 << " GPart/s\n";
+
+}
+
 
 
 
@@ -665,7 +708,7 @@ int main() {
 
     // test_filter();
 
-    // test_weibel();
+    test_weibel();
 
     // test_lwfa();
 
@@ -677,8 +720,9 @@ int main() {
 
     //test_bcspec();
 
-    test_cathode();
-    // test_wtf();
+    // test_cathode();
+
+    // test_frozen();
 
     return 0;
 }

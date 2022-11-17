@@ -51,6 +51,8 @@ Particles::Particles(uint2 const ntiles, uint2 const nx, unsigned int const max_
     malloc_dev( x, size );
     malloc_dev( u, size );
 
+    malloc_dev( idx, size );
+
     // Allocate tile information array on device and initialize using a CUDA kernel
     malloc_dev( tiles, ntiles.x * ntiles.y );
     _init_tiles_kernel <<< 1, 256 >>> ( tiles, ntiles, max_np_tile );
@@ -87,14 +89,71 @@ __host__
  * @return unsigned long long   Total number of particles
  */
 unsigned int Particles::np() {
-    _dev_np = 0;
+    _dev_tmp_uint = 0;
     auto size = ntiles.x*ntiles.y;
     auto block = ( size < 1024 ) ? size : 1024 ;
     auto grid = (size-1)/block + 1;
-    _np_kernel <<< grid, block >>> ( tiles, size, _dev_np.ptr() );
-    return _dev_np.get();
+    _np_kernel <<< grid, block >>> ( tiles, size, _dev_tmp_uint.ptr() );
+    return _dev_tmp_uint.get();
 }
 
+__global__
+void _np_max_tile( t_part_tile const * const __restrict__ d_tiles, 
+    unsigned int const ntiles, unsigned int * const __restrict__ max) {
+    auto group = cg::this_thread_block();
+    auto warp  = cg::tiled_partition<32>(group);
+
+    unsigned int v = 0;
+    for( int i = group.thread_rank(); i < ntiles; i += group.num_threads() )
+        if ( d_tiles[i].n > v ) v = d_tiles[i].n;
+    
+    v = cg::reduce( warp, v, cg::greater<unsigned int>());
+    if ( warp.thread_rank() == 0 ) atomicMax( max, v );
+}
+
+__host__
+/**
+ * @brief Gets maximum number of particles per tile
+ * 
+ * @return unsigned int 
+ */
+unsigned int Particles::np_max_tile() {
+    _dev_tmp_uint = 0;
+    auto size = ntiles.x*ntiles.y;
+    auto block = ( size < 1024 ) ? size : 1024 ;
+    auto grid = (size-1)/block + 1;
+    _np_max_tile <<< grid, block >>> ( tiles, size, _dev_tmp_uint.ptr() );
+    return _dev_tmp_uint.get();
+}
+
+__global__
+void _np_min_tile( t_part_tile const * const __restrict__ d_tiles, 
+    unsigned int const ntiles, unsigned int * const __restrict__ max) {
+    auto group = cg::this_thread_block();
+    auto warp  = cg::tiled_partition<32>(group);
+
+    unsigned int v = 0;
+    for( int i = group.thread_rank(); i < ntiles; i += group.num_threads() )
+        if ( d_tiles[i].n > v ) v = d_tiles[i].n;
+    
+    v = cg::reduce( warp, v, cg::less<unsigned int>());
+    if ( warp.thread_rank() == 0 ) atomicMin( max, v );
+}
+
+__host__
+/**
+ * @brief Gets minimum number of particles per tile
+ * 
+ * @return unsigned int 
+ */
+unsigned int Particles::np_min_tile() {
+    _dev_tmp_uint = 0;
+    auto size = ntiles.x*ntiles.y;
+    auto block = ( size < 1024 ) ? size : 1024 ;
+    auto grid = (size-1)/block + 1;
+    _np_max_tile <<< grid, block >>> ( tiles, size, _dev_tmp_uint.ptr() );
+    return _dev_tmp_uint.get();
+}
 
 __global__
 void _np_exscan_kernel( 
@@ -148,9 +207,9 @@ unsigned int Particles::np_exscan( unsigned int * __restrict__ d_offset ) {
 
     auto size = ntiles.x*ntiles.y;
     auto block = ( size < 1024 ) ? size : 1024 ;
-    _dev_np = 0;
-    _np_exscan_kernel <<< 1, block >>> ( d_offset, tiles, size, _dev_np.ptr() );
-    return _dev_np.get();
+    _dev_tmp_uint = 0;
+    _np_exscan_kernel <<< 1, block >>> ( d_offset, tiles, size, _dev_tmp_uint.ptr() );
+    return _dev_tmp_uint.get();
 }
 
 /**
@@ -358,8 +417,8 @@ void _bnd_out( int const lim,
     float3 __restrict__ *tmp_u  = &tmp_d_u[ tmp_offset ];
 
 
-    __shared__ unsigned int _n1;
-    __shared__ unsigned int _n2;
+    __shared__ int _n1;
+    __shared__ int _n2;
 
     _n1 = 0;
     _n2 = 0;
@@ -367,20 +426,19 @@ void _bnd_out( int const lim,
     block.sync();
 
     // Count number of particles with keys = 1, 2
-    unsigned int n2 = 0, n1 = 0;
+    int n2 = 0, n1 = 0;
     for( unsigned int i = block.thread_rank(); i < size; i+= block.num_threads() ) {
-        int key;
+        int ipos;
+        if ( dir == coord::x ) ipos = ix[i].x;
+        if ( dir == coord::y ) ipos = ix[i].y;
 
-        // Template
-        if ( dir == coord::x ) key = ( ix[i].x < 0 ) + 2 * ( ix[i].x >= lim );
-        if ( dir == coord::y ) key = ( ix[i].y < 0 ) + 2 * ( ix[i].y >= lim );
-
+        int key = ( ipos < 0 ) + 2 * ( ipos >= lim );
         n2 += ( key == 2 );
         n1 += ( key == 1 );
     }
 
-    n2 = cg::reduce( warp, n2, cg::plus<unsigned int>());
-    n1 = cg::reduce( warp, n1, cg::plus<unsigned int>());
+    n2 = cg::reduce( warp, n2, cg::plus<int>());
+    n1 = cg::reduce( warp, n1, cg::plus<int>());
 
     if ( warp.thread_rank() == 0 ) {
         atomicAdd( &_n2, n2 );
@@ -396,46 +454,46 @@ void _bnd_out( int const lim,
     n2 = _n2;
 
     // Number of particles leaving both boundaries
-    unsigned int const nmove = n2 + n1;
+    int const nmove = n2 + n1;
 
     // Number of particles staying
-    unsigned int const n0 = size - nmove;
+    int const n0 = size - nmove;
 
-    __shared__ unsigned int _k0;
-    __shared__ unsigned int _k1;
-    __shared__ unsigned int _k2;
+/*
+    __shared__ int _k0;
+    __shared__ int _k1;
+    __shared__ int _k2;
 
     _k2 = n1;
     _k1 = 0;
     _k0 = nmove;
+*/
+
+    __shared__ int _idx[3];
+
+    _idx[2] = n1;
+    _idx[1] = 0;
+    _idx[0] = nmove;
 
     block.sync();
 
     // Copy values that are moving to temp buffer
     {
-        int k2, k1, k0;
         for( int i = block.thread_rank(); i < size; i+= block.num_threads() ) {
-            int key;
+            int ipos;
+            if ( dir == coord::x ) ipos = ix[i].x;
+            if ( dir == coord::y ) ipos = ix[i].y;
             
-            // Template
-            if ( dir == coord::x ) key = ( ix[i].x < 0 ) + 2 * ( ix[i].x >= lim );
-            if ( dir == coord::y ) key = ( ix[i].y < 0 ) + 2 * ( ix[i].y >= lim );
-
-            int const c2 = ( key == 2 );
-            int const c1 = ( key == 1 );
-            int const c0 = ( key == 0 ) && ( i >= n0 ); // Used to fill holes
-
-            if ( c2 ) k2 = atomicAdd( &_k2, 1 );
-            if ( c1 ) k1 = atomicAdd( &_k1, 1 );
-            if ( c0 ) k0 = atomicAdd( &_k0, 1 );
+            int key = ( ipos < 0 ) + 2 * ( ipos >= lim );
+            if (( key == 0 ) && ( i < n0 )) key = -1;
 
             // Data prefetch using coalesced access
             int2   pre_ix = ix[i];
             float2 pre_x  = x[i];
             float3 pre_u  = u[i];
 
-            if ( key || c0 ) {
-                int const idx = c2 * k2 + c1 * k1 + c0 * k0;
+            if ( key >= 0 ) {
+                int idx = atomicAdd( &_idx[key], 1 );
                 tmp_ix[idx] = pre_ix;
                 tmp_x[idx]  = pre_x;
                 tmp_u[idx]  = pre_u;
@@ -443,7 +501,7 @@ void _bnd_out( int const lim,
         }
     }
 
-    __shared__ unsigned int _k;
+    __shared__ int _k;
     _k = nmove;
 
     block.sync();
@@ -451,13 +509,12 @@ void _bnd_out( int const lim,
     // Fill holes left behind
     {
         for( int i = block.thread_rank(); i < n0; i+= block.num_threads() ) {
-            int c;
+            
+            int ipos;
+            if ( dir == coord::x ) ipos = ix[i].x;
+            if ( dir == coord::y ) ipos = ix[i].y;
 
-            // Template
-            if ( dir == coord::x ) c = ( ix[i].x < 0 ) || ( ix[i].x >= lim );
-            if ( dir == coord::y ) c = ( ix[i].y < 0 ) || ( ix[i].y >= lim );
-
-            if ( c ) {
+            if ( ( ipos < 0 ) || ( ipos >= lim ) ) {
                 int k = atomicAdd( &_k, 1 );
                 ix[i] = tmp_ix[ k ];
                 x[i] = tmp_x[ k ];
@@ -474,141 +531,12 @@ void _bnd_out( int const lim,
     }
 }
 
-#if 0
-
-// __UNDER DEVELOPMENT__ do not remove!
-
-
-/**
- * @brief CUDA kernel for copying particles out of the tile to a temp buffer
- * 
- * This version handles both directions (x,y) at once. Outgoing particles will
- * be organized in the temp buffer according to the direction index j, where
- * 
- * j = dir_y * 3 + dir_x
- * 
- * Each variable dir_* will be 0 (not leaving in that direction), 1 (leaving
- * through the lower boundary) or 2 (leaving through the open boundary), e.g.
- * a particle leaving through the top right corner will have j = 2*3 + 2 = 8.
- * 
- * @param nx            Tile grid size (particle limits)
- * @param d_tiles       Tile information (main buffer)
- * @param d_ix          Particle cells (main buffer)
- * @param d_x           Particle positions (main buffer)
- * @param d_u           Particle momenta (main buffer)
- * @param tmp_d_tiles   Tile information (temp buffer)
- * @param tmp_d_ix      Particle cells (temp buffer)
- * @param tmp_d_x       Particle positions (temp buffer)
- * @param tmp_d_u       Particle generalized velocity (temp buffer)
- */
-void _bnd_out_xy( int2 const nx, 
-    t_part_tile * const __restrict__ d_tiles,
-    int2 * __restrict__ d_ix, float2 * __restrict__ d_x, float3 * __restrict__ d_u,
-    t_part_tile * const __restrict__ tmp_d_tiles,
-    int2 * __restrict__ tmp_d_ix, float2 * __restrict__ tmp_d_x, float3 * __restrict__ tmp_d_u )
-{
-    auto block = cg::this_thread_block();
-    auto warp  = cg::tiled_partition<32>(block);
-
-    const int tid = blockIdx.y * gridDim.x + blockIdx.x;
-
-    unsigned int const size = d_tiles[ tid ].n;
-    unsigned int const offset =  d_tiles[ tid ].pos;
-    int2   __restrict__ *ix = &d_ix[ offset ];
-    float2 __restrict__ *x  = &d_x[ offset ];
-    float3 __restrict__ *u  = &d_u[ offset ];
-
-    unsigned int const tmp_offset =  tmp_d_tiles[ tid ].pos;
-    int2   __restrict__ *tmp_ix = &tmp_d_ix[ tmp_offset ];
-    float2 __restrict__ *tmp_x  = &tmp_d_x[ tmp_offset ];
-    float3 __restrict__ *tmp_u  = &tmp_d_u[ tmp_offset ];
-
-    // n[ i ] - Number of particles moving in direction i (0 index are particles
-    //          not moving)
-    __shared__ unsigned int n[9];
-
-    // k[ i ] - Offset in output buffer for particles going in direction i
-    // k[ 0 ] is used for particles that will be used to fill the holes left by particles
-    __shared__ unsigned int k[9];
-
-    for( unsigned int i = block.thread_rank(); i < 9 ; i+= block.num_threads() ) {
-        n[i] = 0;
-    }
-    block.sync();
-
-    // Count particles moving to other tiles
-    for( unsigned int i = block.thread_rank(); i < size; i+= block.num_threads() ) {
-
-        int xc = ( ix[i].x < 0 ) + 2 * ( ix[i].x >= nx.x );
-        int yc = ( ix[i].y < 0 ) + 2 * ( ix[i].y >= nx.y );
-
-        int key = xc + 3*yc;
-        if ( key > 0 ) atomicAdd( &n[key], 1 );
-    }
-    block.sync();
-
-    __shared__ unsigned int k0;
-
-    if ( block.thread_rank() == 0 ) {
-        unsigned int nmove = 0;
-        k[ 0 ] = 0;
-        for( unsigned int i = 1; i < 9; i++ ) {
-            nmove += n[i];
-            k[i] = k[i-1] + n[i-1];
-        }
-        k[0] = nmove;
-        n[0] = size - nmove;
-        k0 = nmove;
-
-        // Store new values on tile information arrays
-        d_tiles[ tid ].n = size - nmove;
-        for( int i = 0; i < 9; i++ ) tmp_d_tiles[tid].nb[i] = n[i];
-    }
-
-    block.sync();
-
-    const unsigned int n0 = n[0];
-
-    for( unsigned int i = block.thread_rank(); i < size; i+= block.num_threads() ) {
-        int xc = ( ix[i].x < 0 ) + 2 * ( ix[i].x >= nx.x );
-        int yc = ( ix[i].y < 0 ) + 2 * ( ix[i].y >= nx.y );
-        int key = xc + 3*yc;
-
-        if ( key > 0 || ( key == 0 && i >= n0 ) ) {
-            unsigned int idx = atomicAdd( &k[key], 1 );
-            tmp_ix[idx] = ix[i];
-            tmp_x[idx]  =  x[i];
-            tmp_u[idx]  =  u[i];
-        }
-    }
-
-    block.sync();
-
-    // Fill holes left behind
-    for( unsigned int i = block.thread_rank(); i < n0; i+= block.num_threads() ) {
-        int xc = ( ix[i].x < 0 ) || ( ix[i].x >= nx.x );
-        int yc = ( ix[i].y < 0 ) || ( ix[i].y >= nx.y );
-
-        if ( xc || yc ) {
-            int idx = atomicAdd( &k0, 1 );
-            ix[i] = tmp_ix[ k ];
-            x[i] = tmp_x[ k ];
-            u[i] = tmp_u[ k ];
-        }
-    }
-}
-
-#endif
-
-#if 0
-
-// __UNDER DEVELOPMENT__ do not remove!
 
 template < coord::cart dir >
 __global__
-void _bnd_out_r2( int const lim, 
+void _bnd_out_2( int const lim, 
     t_part_tile * const __restrict__ d_tiles,
-    int2 * __restrict__ d_ix, float2 * __restrict__ d_x, float3 * __restrict__ d_u,
+    int2 * __restrict__ d_ix, float2 * __restrict__ d_x, float3 * __restrict__ d_u, int * __restrict__ d_idx,
     t_part_tile * const __restrict__ tmp_d_tiles,
     int2 * __restrict__ tmp_d_ix, float2 * __restrict__ tmp_d_x, float3 * __restrict__ tmp_d_u )
 {
@@ -617,176 +545,114 @@ void _bnd_out_r2( int const lim,
 
     const int tid = blockIdx.y * gridDim.x + blockIdx.x;
 
-    unsigned int const size = d_tiles[ tid ].n;
+    unsigned int const np = d_tiles[ tid ].n;
     unsigned int const offset =  d_tiles[ tid ].pos;
-    int2   __restrict__ *ix = &d_ix[ offset ];
-    float2 __restrict__ *x  = &d_x[ offset ];
-    float3 __restrict__ *u  = &d_u[ offset ];
+    int2   * __restrict__ ix  = &d_ix[ offset ];
+    float2 * __restrict__ x   = &d_x[ offset ];
+    float3 * __restrict__ u   = &d_u[ offset ];
+
+    int * __restrict__ idx = &d_idx[ offset ];
 
     unsigned int const tmp_offset =  tmp_d_tiles[ tid ].pos;
-    int2   __restrict__ *tmp_ix = &tmp_d_ix[ tmp_offset ];
-    float2 __restrict__ *tmp_x  = &tmp_d_x[ tmp_offset ];
-    float3 __restrict__ *tmp_u  = &tmp_d_u[ tmp_offset ];
+    int2   * __restrict__ tmp_ix = &tmp_d_ix[ tmp_offset ];
+    float2 * __restrict__ tmp_x  = &tmp_d_x[ tmp_offset ];
+    float3 * __restrict__ tmp_u  = &tmp_d_u[ tmp_offset ];
 
-    __shared__ int2   stage_ix[ 1024 ];
-    __shared__ float2 stage_x[ 1024 ];
-    __shared__ float3 stage_u[ 1024 ];
 
-    unsigned int total_n1, total_n2;
+    // Total number of particles leaving
+    __shared__ int _nmove;
 
-    {   // Get total_n1 and total_n2
+    // Number of particle leaving to the left neighbour
+    __shared__ int _n1;
 
-        __shared__ unsigned int _n1;
-        __shared__ unsigned int _n2;
-        _n1 = 0;
-        _n2 = 0;
+    _nmove = 0;
+    _n1 = 0;
 
-        block.sync();
+    block.sync();
 
-        // Count number of particles with keys = 1, 2
-        unsigned int n2 = 0, n1 = 0;
-        for( unsigned int i = block.thread_rank(); i < size; i+= block.num_threads() ) {
-            int key;
+    int n1 = 0;
 
-            // Template
-            if ( dir == coord::x ) key = ( ix[i].x < 0 ) + 2 * ( ix[i].x >= lim );
-            if ( dir == coord::y ) key = ( ix[i].y < 0 ) + 2 * ( ix[i].y >= lim );
+    for( int i = block.thread_rank(); i < np; i+= block.num_threads() ) {
+        int ipos;
+        if ( dir == coord::x ) ipos = ix[i].x;
+        if ( dir == coord::y ) ipos = ix[i].y;
 
-            n2 += ( key == 2 );
-            n1 += ( key == 1 );
+        n1 += ( ipos < 0 );
+
+        if ( ( ipos < 0 ) || ( ipos >= lim ) ) {
+            int k = atomicAdd( &_nmove, 1 );
+            idx[k] = i;
         }
-
-        n2 = cg::reduce( warp, n2, cg::plus<unsigned int>());
-        n1 = cg::reduce( warp, n1, cg::plus<unsigned int>());
-
-        if ( warp.thread_rank() == 0 ) {
-            atomicAdd( &_n2, n2 );
-            atomicAdd( &_n1, n1 );
-        }
-
-        block.sync();
-        total_n1 = _n1;
-        total_n2 = _n2;
     }
 
-    // Process particles one block.num_threads() at a time 
-    for( int i = 0; i < size; i+= block.num_threads() ) {
+    n1 = cg::reduce( warp, n1, cg::plus<int>());
+    if ( warp.thread_rank() == 0 ) atomicAdd( &_n1, n1 );
 
-        // particle index
-        int j = i + block.thread_rank();
-        int key;
-        unsigned int n1, n2;
-        
-        // Get number of particles leaving this chunk
-        __shared__ unsigned int _n1;
-        __shared__ unsigned int _n2;
-        _n1 = 0; _n2= 0;
+    block.sync();
 
-        block.sync();
+    // Number of particles staying in node
+    int const _n0 = np - _nmove;
 
-        if ( j < size ) {
+    // Number of particles leaving to the right neighbour
+    int const _n2 = _nmove - _n1;
 
-            // Template
-            if ( dir == coord::x ) key = ( ix[j].x < 0 ) + 2 * ( ix[j].x >= lim );
-            if ( dir == coord::y ) key = ( ix[j].y < 0 ) + 2 * ( ix[j].y >= lim );
+    // Indices for tmp partilce buffer ( 0 - lower, 1 - upper )
+    __shared__ int _k[2];
+    _k[0] =   0;
+    _k[1] = _n1;
 
-            n2 = ( key == 2 );
-            n1 = ( key == 1 );
-        } else {
-            n2 = 0;
-            n1 = 0;
-            key = 0;
-        }
+    // Index for copying back particles to fill holes
+    __shared__ int _c;
+    _c = _n0;
 
-        n2 = cg::reduce( warp, n2, cg::plus<unsigned int>());
-        n1 = cg::reduce( warp, n1, cg::plus<unsigned int>());
-        if ( warp.thread_rank() == 0 ) {
-            atomicAdd( &_n2, n2 );
-            atomicAdd( &_n1, n1 );
-        }
+    block.sync();
 
-        // Compact outgoing data into staging buffers
+    for( int i = block.thread_rank(); i < _nmove; i+= block.num_threads() ) {
+        int src = idx[i];
 
-        __shared__ unsigned int _k2;
-        __shared__ unsigned int _k1;
-        __shared__ unsigned int _k0;
-        _k2 = 0; _k1 = 0; _k0 = 0;
+        int ipos;
+        if ( dir == coord::x ) ipos = ix[src].x;
+        if ( dir == coord::y ) ipos = ix[src].y;
 
-        block.sync();
-        n2 = _n2; n1 = _n1;
+        int bnd = ( ipos >= lim );
 
-        unsigned int k0, k1, k2;
+        int k = atomicAdd( & _k[bnd], 1 );
 
-        if ( j < size ) {
-            int const c2 = ( key == 2 );
-            int const c1 = ( key == 1 );
-            int const c0 = ( key == 0 ) && ( j >= n0 ); // Used to fill holes
-
-            if ( c2 ) k2 = atomicAdd( &_k2, 1 );
-            if ( c1 ) k1 = atomicAdd( &_k1, 1 );
-            if ( c0 ) k0 = atomicAdd( &_k0, 1 );
-
-            if ( key || c0 ) {
-                int const idx = c2 * ( k2 + n1 ) + c1 * k1 + c0 * ( k0 + n2 + n1 );
-                stage_ix[idx] = ix[j];
-                stage_x[idx]  = x[j];
-                stage_u[idx]  = u[j];
-            }
-        }
-
-        block.sync();
-        k2 = _k2; k1 = _k1; k0 = k0;
-
-        // Copy data to external temporary memory
-        int const l = block.thread_rank();
-        if ( l < k0 + k1 + k2 ) {
-            
-            int const idx;
-            if ( l > k1 + k2 ) idx = total_n1 + total_n2 + total_k0;
-            else if ( l > k1 ) idx = total_n1 + total_k2;
-            else idx = 
-            tmp_ix[ idx ] = stage_ix[l];
-            tmp_x[ idx ]  = stage_x[l];
-            tmp_u[ idx ]  = stage_u[l];
-        }
-
-        if ( l == 0 ) {
-            total_k0 += k0;
-            total_k1 += k1;
-            total_k2 += k2;
-        }
-
+        tmp_ix[k] = ix[src];
+        tmp_x[k]  = x[src];
+        tmp_u[k]  = u[src];
     }
 
+    block.sync();
 
-    // Fill holes left behind
-    {
-        int k;
-        for( int i = block.thread_rank(); i < n0; i+= block.num_threads() ) {
-            int c;
+    for( int i = block.thread_rank(); i < _nmove; i+= block.num_threads() ) {
 
-            // Template
-            if ( dir == coord::x ) c = ( ix[i].x < 0 ) || ( ix[i].x >= lim );
-            if ( dir == coord::y ) c = ( ix[i].y < 0 ) || ( ix[i].y >= lim );
+        int tgt = idx[i];
 
-            if ( c ) {
-                k = atomicAdd( &_k, 1 );
-                ix[i] = tmp_ix[ k ];
-                x[i] = tmp_x[ k ];
-                u[i] = tmp_u[ k ];
-            }
+        if ( tgt < _n0 ) {
+            int c, ipos;
+
+            do {
+                c = atomicAdd( &_c, 1 );
+                if ( dir == coord::x ) ipos = ix[c].x;
+                if ( dir == coord::y ) ipos = ix[c].y;
+            } while (( ipos < 0 ) || ( ipos >= lim ));
+
+            ix[ tgt ] = ix[c];
+            x[ tgt ]  = x[c];
+            u[ tgt ]  = u[c];
         }
     }
 
     // Store new values on tile information
     if ( block.thread_rank() == 0 ) {
-        d_tiles[ tid ].n  = n0;
-        tmp_d_tiles[ tid ].n  = n1;
-        tmp_d_tiles[ tid ].nb = n2;
+        d_tiles[ tid ].n      = _n0;
+        tmp_d_tiles[ tid ].n  = _n1;
+        tmp_d_tiles[ tid ].nb = _n2;
     }
+
 }
 
-#endif
 
 /**
  * @brief CUDA kernel for copying in particles that moved out of neighboring
@@ -871,6 +737,7 @@ void _bnd_in( int const lim,
             u[ n0 + i ]  = upper_u[i];
         }
         n0 += nu;
+        
     }
 
     // Copy from lower neighbour
@@ -917,9 +784,36 @@ void Particles::tile_sort( Particles &tmp ) {
     dim3 grid( ntiles.x, ntiles.y );
     dim3 block( 1024 );
 
+#if 0
+    _bnd_out_2< coord::x > <<< grid, block >>> ( 
+        nx.x, 
+        tiles, ix, x, u, idx,
+        tmp.tiles, tmp.ix, tmp.x, tmp.u
+    );
+
+    _bnd_in< coord::x >  <<< grid, block >>> ( 
+        nx.x,
+        tiles, ix, x, u,
+        tmp.tiles, tmp.ix, tmp.x, tmp.u,
+        periodic.x
+    );
+
+    _bnd_out_2< coord::y > <<< grid, block >>> ( 
+        nx.y, 
+        tiles, ix, x, u, idx,
+        tmp.tiles, tmp.ix, tmp.x, tmp.u
+     );
+
+    _bnd_in< coord::y >  <<< grid, block >>> ( 
+        nx.y,
+        tiles, ix, x, u,
+        tmp.tiles, tmp.ix, tmp.x, tmp.u,
+        periodic.y
+    );
+#else
     _bnd_out< coord::x > <<< grid, block >>> ( 
         nx.x, 
-        tiles, ix, x, u,
+        tiles, ix, x, u, 
         tmp.tiles, tmp.ix, tmp.x, tmp.u
     );
 
@@ -932,7 +826,7 @@ void Particles::tile_sort( Particles &tmp ) {
 
     _bnd_out< coord::y > <<< grid, block >>> ( 
         nx.y, 
-        tiles, ix, x, u,
+        tiles, ix, x, u, 
         tmp.tiles, tmp.ix, tmp.x, tmp.u
      );
 
@@ -942,6 +836,8 @@ void Particles::tile_sort( Particles &tmp ) {
         tmp.tiles, tmp.ix, tmp.x, tmp.u,
         periodic.y
     );
+#endif
+
 }
 
 __host__
@@ -1026,7 +922,7 @@ void _validate( t_part_tile * tiles,
     int2   const * const __restrict__ d_ix,
     float2 const * const __restrict__ d_x,
     float3 const * const __restrict__ d_u,
-    uint2 const nx, int const over, int * out ) {
+    uint2 const nx, int const over, unsigned int * out ) {
 
     int const tid = blockIdx.y * gridDim.x + blockIdx.x;
 
@@ -1082,23 +978,94 @@ void _validate( t_part_tile * tiles,
     }
 }
 
+
+template < coord::cart dir >
+__global__
+void _validate_dir( t_part_tile * tiles, 
+    int2   const * const __restrict__ d_ix,
+    float2 const * const __restrict__ d_x,
+    float3 const * const __restrict__ d_u,
+    uint2 const nx, int const over, unsigned int * out ) {
+
+    int const tid = blockIdx.y * gridDim.x + blockIdx.x;
+
+    int const offset = tiles[ tid ].pos;
+    int const np     = tiles[ tid ].n;
+    int2   const * const __restrict__ ix = &d_ix[ offset ];
+    float2 const * const __restrict__ x  = &d_x[ offset ];
+    float3 const * const __restrict__ u  = &d_u[ offset ];
+
+    int2 const lb = make_int2( -over, -over );
+    int2 const ub = make_int2( nx.x + over, nx.y + over ); 
+
+    for( int i = threadIdx.x; i < np; i += blockDim.x) {
+        int err = 0;
+
+        if ( dir == coord::x ) {
+            if ( (ix[i].x < lb.x) || (ix[i].x >= ub.x )) {
+                printf("(*error*) Invalid ix[%d].x position (%d), range = [%d,%d[\n", i, ix[i].x, lb.x, ub.x );
+                err = 1;
+            }
+            if ( x[i].x < -0.5f || x[i].x >= 0.5f ) {
+                printf("(*error*) Invalid x[%d].x position (%f), range = [-0.5,0.5[\n", i, x[i].x );
+                err = 1;
+            }
+        }
+
+        if ( dir == coord::x ) {
+            if ( (ix[i].y < lb.y) || (ix[i].y >= ub.y )) {
+                printf("(*error*) Invalid ix[%d].y position (%d), range = [%d,%d[\n", i, ix[i].y, lb.y, ub.y );
+                err = 1;
+            }
+            if ( x[i].y < -0.5f || x[i].y >= 0.5f ) {
+                printf("(*error*) Invalid x[%d].y position (%f), range = [-0.5,0.5[\n", i, x[i].y );
+                err = 1;
+            }
+        }
+
+        if ( isnan(u[i].x) || isinf(u[i].x) || fabsf(u[i].x) >= __ULIM ) {
+            printf("(*error*) Invalid u[%d].x gen. velocity (%f)\n", i, u[i].x );
+            err = 1;
+        }
+
+        if ( isnan(u[i].y) || isinf(u[i].y) || fabsf(u[i].x) >= __ULIM ) {
+            printf("(*error*) Invalid u[%d].y gen. velocity (%f)\n", i, u[i].y );
+            err = 1;
+        }
+
+        if ( isnan(u[i].z) || isinf(u[i].z) || fabsf(u[i].x) >= __ULIM ) {
+            printf("(*error*) Invalid u[%d].z gen. velocity (%f)\n", i, u[i].z );
+            err = 1;
+        }
+
+        if ( err ) {
+            atomicAdd( out, 1 );
+            break;
+        }
+    }
+}
+
 #undef __ULIM
 
 __host__
 /**
- * @brief Checks if particle buffer data is correct
+ * @brief Validates particle data in buffer
  * 
+ * Routine checks for valid positions (both cell index and cell position) and
+ * for valid velocities
+ * 
+ * @param msg       Message to print in case error is found
+ * @param over      Amount of extra cells indices beyond limit allowed. Used
+ *                  when checking the buffer before tile_sort()
  */
 void Particles::validate( std::string msg, int const over ) {
 
     dim3 grid( ntiles.x, ntiles.y );
     dim3 block( 32 );
 
-    device::Var<int> err(0);
+    _validate <<< grid, block >>> ( tiles, ix, x, u, nx, over, _dev_tmp_uint.ptr() );
 
-    _validate <<< grid, block >>> ( tiles, ix, x, u, nx, over, err.ptr() );
-
-    unsigned int nerr = err.get();
+    unsigned int nerr = _dev_tmp_uint.get();
     if ( nerr > 0 ) {
         std::cerr << "(*error*) " << msg << "\n";
         std::cerr << "(*error*) invalid particle, aborting...\n";

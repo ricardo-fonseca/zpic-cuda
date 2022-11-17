@@ -33,9 +33,7 @@ class Particles {
     
     private:
 
-    // Used by np and np_exscan functions to return the number of particles
-    // to host
-    device::Var<unsigned int> _dev_np;
+    device::Var<unsigned int> _dev_tmp_uint;
     unsigned int max_np_tile;
 
     public:
@@ -50,6 +48,8 @@ class Particles {
     float2 *x;
     float3 *u;
 
+    int *idx;
+
     t_part_tile *tiles;
 
     __host__
@@ -60,6 +60,8 @@ class Particles {
         free_dev( u );
         free_dev( x );
         free_dev( ix );
+
+        free_dev( idx );
     }
 
     /**
@@ -77,6 +79,22 @@ class Particles {
      * @return unsigned long long   Total number of particles
      */
     unsigned int np();
+
+    __host__
+    /**
+     * @brief Gets maximum number of particles per tile
+     * 
+     * @return unsigned int 
+     */
+    unsigned int np_max_tile();
+
+    __host__
+    /**
+     * @brief Gets minimum number of particles per tile
+     * 
+     * @return unsigned int 
+     */
+    unsigned int np_min_tile();
 
     __host__
     unsigned int np_exscan( unsigned int * const __restrict__ d_offset );

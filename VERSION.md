@@ -5,6 +5,13 @@
 * Thermal boundaries for particles
 * Improve particle tile sorter, make it production ready
 
+## 2022.11.17
+
+* Adds performance measurements
+* Adds "frozen" (0 temperature, 0 fluid velocity) test
+* Adds new particle tile sorter using a temporary buffer for storing the indices
+  of particles moving from tile
+
 ## 2022.11.7
 
 __CRITICAL:__ Fixes critical issues
@@ -15,7 +22,7 @@ __CRITICAL:__ Fixes critical issues
 * Changes `Species` class initialization behavior
   * Adds a `Species::initialize()` method, to be called by the simulation object
     to complete initialization.
-  * After species is created the user may freely change the species initialization
+  * After the species is created the user may freely change the species initialization
     parameters
   * When the species is added to the simulation (`Simulation::add_species()`) the
     `Simulation` object will call the `Species::initialize()` method, creating the

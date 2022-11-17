@@ -57,6 +57,7 @@ Species::Species( std::string const name, float const m_q, uint2 const ppc ):
     particles = nullptr;
     tmp = nullptr;
     d_energy = nullptr;
+    d_nmove = nullptr;
 }
 
 
@@ -102,6 +103,9 @@ void Species::initialize( float2 const box_, uint2 const ntiles, uint2 const nx,
     malloc_dev( d_energy, 1 );
     device::zero( d_energy, 1 );
 
+    malloc_dev( d_nmove, 1 );
+    device::zero( d_nmove, 1 );
+
     // Reset iteration numbers
     iter = 0;
 
@@ -124,6 +128,8 @@ Species::~Species() {
     delete( udist );
 
     free_dev( d_energy );
+    free_dev( d_nmove );
+
 };
 
 
@@ -433,7 +439,8 @@ void _move_deposit_kernel(
     t_part_tile const * const __restrict__ d_tiles,
     int2* __restrict__ d_ix, float2* __restrict__ d_x, float3* __restrict__ d_u,
     float3 * const __restrict__ d_current, unsigned int const current_offset, uint2 const ext_nx,
-    float2 const dt_dx, float const q, float2 const qnx ) 
+    float2 const dt_dx, float const q, float2 const qnx, 
+    unsigned long long * const __restrict__ d_nmove ) 
 {
     
     extern __shared__ float3 _move_deposit_buffer[];
@@ -606,6 +613,8 @@ void _move_deposit_kernel(
         d_current[tile_off + i].y += _move_deposit_buffer[i].y;
         d_current[tile_off + i].z += _move_deposit_buffer[i].z;
     }
+
+    if ( block.thread_rank() == 0 ) atomicAdd( d_nmove, np );
 }
 
 
@@ -637,7 +646,8 @@ void Species::move( VectorField * J )
     _move_deposit_kernel <<< grid, block, shm_size >>> ( 
         particles -> tiles, 
         particles -> ix, particles -> x, particles -> u,
-        J -> d_buffer, J -> offset(), ext_nx, dt_dx, q, qnx
+        J -> d_buffer, J -> offset(), ext_nx, dt_dx, q, qnx,
+        d_nmove
     );
 }
 
@@ -654,7 +664,8 @@ __global__
 void _move_kernel(
     t_part_tile const * const __restrict__ d_tiles,
     int2* __restrict__ d_ix, float2* __restrict__ d_x, float3* __restrict__ d_u,
-    float2 const dt_dx ) 
+    float2 const dt_dx, 
+    unsigned long long * const __restrict__ d_nmove ) 
 {
     
     auto block = cg::this_thread_block();
@@ -707,6 +718,8 @@ void _move_kernel(
         );
         ix[i] = ix1;
     }
+
+    if ( block.thread_rank() == 0 ) atomicAdd( d_nmove, np );
 }
 
 __host__
@@ -730,7 +743,7 @@ void Species::move( )
 
     _move_kernel <<< grid, block >>> ( 
         particles -> tiles, particles -> ix, particles -> x, particles -> u,
-        dt_dx
+        dt_dx, d_nmove
     );
 
 }

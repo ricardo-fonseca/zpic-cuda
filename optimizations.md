@@ -30,7 +30,7 @@ Elapsed time was: 2.619 s
                    10.58%  277.69ms      1000  277.69us  227.65us  348.06us  _bnd_out_r1_y(int, ParticlesTile*, int2*, float2*, float3*, ParticlesTile*, int2*, float2*, float3*)
 ```
 
-Speedup was __5.54 x__ for the `bnd_out` routines, __1.97 x__ overall.
+The speedup was __5.54 x__ for the `bnd_out` routines, __1.97 x__ overall.
 
 2. Replace the different `bnd_out_x` and `bnd_in_y` routines with a template based one (and also `bnd_in_*`)
     * This makes the code easier to read, it should have 0 impact on performance
@@ -63,8 +63,29 @@ Elapsed time was: 2.603 s
 
 This leads to a marginal speedup of 1.03x.
 
-3. Does a n1, n2 reduce operation at warp level, then only each warp.thread_rank 0 calls atomicAdd()
+3. Does an `n1`, `n2` reduce operation at warp level, then only each warp.thread_rank 0 calls `atomicAdd()`
     * No noticeable difference, but it looks nicer so we keep it.
+
+4. Instead of using scalar variables (`_k0, _k1, _k2`) for calculating the indices of particles in outgoing buffers use an array (`_idx[2]`).
+    * This allows for lesser thread divergence because the `atomicAdd()` calls are the same on all threads (with different addresses)
+    * Marginal ( ~ 1.01x ) speedup, nicer code, kept it.
+
+5. Use a temporary buffer (in device memory) for storing indices of particles moving out:
+    * In the first step, all particles are processed and the indices of particles moving out are stored in this buffer
+    * The next steps (copy out, fill holes) are only performed for the indices in the temporary buffer.
+    * This avoids processing the full particle list multiple times __and__ eliminates thread divergence on steps 2 and 3 (except for some fringe situations)
+
+```text
+==32471== Profiling application: ./zpic-cuda
+==32471== Profiling result:
+            Type  Time(%)      Time     Calls       Avg       Min       Max  Name
+ GPU activities:   60.39%  1.04872s      1000  1.0487ms  696.86us  10.827ms  _move_deposit_kernel(ParticlesTile const *, int2*, float2*, float3*, float3*, unsigned int, uint2, float2, float, float2, __int64*)
+                   22.24%  386.14ms      1000  386.14us  349.34us  481.18us  void _push_kernel<species::pusher>(ParticlesTile const *, int2*, float2*, float3*, float3*, float3*, unsigned int, uint2, float, double*)
+                    6.36%  110.42ms      1000  110.42us  92.991us  138.46us  void _bnd_out_2<coord::cart>(int, ParticlesTile*, int2*, float2*, float3*, int*, ParticlesTile*, int2*, float2*, float3*)
+                    6.26%  108.64ms      1000  108.64us  88.255us  139.62us  void _bnd_out_2<coord::cart>(int, ParticlesTile*, int2*, float2*, float3*, int*, ParticlesTile*, int2*, float2*, float3*)
+```
+
+The speedup was __2.42 x__ for the `bnd_out` routines, __1.20 x__ overall.
 
 
 ## Current deposit
