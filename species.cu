@@ -221,17 +221,16 @@ void Species::move_window_inject() {
 
 __global__
 void _species_bcx(    
-    t_part_tiles tiles,
-    int2* __restrict__ d_ix, float2* __restrict__ d_x, float3* __restrict__ d_u,
+    t_part_tiles const tiles, t_part_data const data,
     int const nx, uint2 const ntiles, species::bc_type bc ) 
 {
     const int tid = blockIdx.y * ntiles.x + blockIdx.x * (ntiles.x - 1);
 
     const int part_offset    = tiles.offset[ tid ];
     const int np             = tiles.np[ tid ];
-    int2   __restrict__ *ix  = &d_ix[ part_offset ];
-    float2 __restrict__ *x   = &d_x[ part_offset ];
-    float3 __restrict__ *u   = &d_u[ part_offset ];
+    int2   __restrict__ *ix  = &data.ix[ part_offset ];
+    float2 __restrict__ *x   = &data.x[ part_offset ];
+    float3 __restrict__ *u   = &data.u[ part_offset ];
 
     if ( blockIdx.x == 0 ) {
         // Lower boundary
@@ -265,17 +264,16 @@ void _species_bcx(
 
 __global__
 void _species_bcy(
-    t_part_tiles tiles,
-    int2* __restrict__ d_ix, float2* __restrict__ d_x, float3* __restrict__ d_u,
+    t_part_tiles const tiles, t_part_data const data,
     int const ny, uint2 const ntiles, species::bc_type bc ) 
 {
     const int tid = blockIdx.y * (ntiles.y - 1) * ntiles.x + blockIdx.x;
 
     const int part_offset    = tiles.offset[ tid ];
     const int np             = tiles.np[ tid ];
-    int2   __restrict__ *ix  = &d_ix[ part_offset ];
-    float2 __restrict__ *x   = &d_x[ part_offset ];
-    float3 __restrict__ *u   = &d_u[ part_offset ];
+    int2   __restrict__ *ix  = &data.ix[ part_offset ];
+    float2 __restrict__ *x   = &data.x[ part_offset ];
+    float3 __restrict__ *u   = &data.u[ part_offset ];
 
     if ( blockIdx.y == 0 ) {
         // Lower boundary
@@ -319,8 +317,7 @@ void Species::process_bc() {
     if ( bc.x.lower > species::bc::periodic || bc.x.upper > species::bc::periodic ) {
         dim3 grid( 2, particles->ntiles.y );
         _species_bcx <<< grid, block >>> ( 
-            particles -> tiles,
-            particles -> ix, particles -> x, particles -> u,
+            particles -> tiles, particles -> data,
             particles -> nx.x, particles -> ntiles, bc );
     }
 
@@ -328,8 +325,7 @@ void Species::process_bc() {
     if ( bc.y.lower > species::bc::periodic || bc.y.upper > species::bc::periodic ) {
         dim3 grid( particles->ntiles.x, 2 );
         _species_bcy <<< grid, block >>> ( 
-            particles -> tiles,
-            particles -> ix, particles -> x, particles -> u,
+            particles -> tiles, particles -> data,
             particles -> nx.y, particles -> ntiles, bc );
     }
 
@@ -439,8 +435,7 @@ __global__
  * @param qnx               Normalization values for in plane current deposition
  */
 void _move_deposit_kernel(
-    t_part_tiles tiles,
-    int2* __restrict__ d_ix, float2* __restrict__ d_x, float3* __restrict__ d_u,
+    t_part_tiles const tiles, t_part_data const data,
     float3 * const __restrict__ d_current, unsigned int const current_offset, uint2 const ext_nx,
     float2 const dt_dx, float const q, float2 const qnx, 
     unsigned long long * const __restrict__ d_nmove ) 
@@ -466,9 +461,9 @@ void _move_deposit_kernel(
 
     const int part_offset = tiles.offset[ tid ];
     const int np     = tiles.np[ tid ];
-    int2   __restrict__ *ix  = &d_ix[ part_offset ];
-    float2 __restrict__ *x   = &d_x[ part_offset ];
-    float3 __restrict__ *u   = &d_u[ part_offset ];
+    int2   __restrict__ *ix  = &data.ix[ part_offset ];
+    float2 __restrict__ *x   = &data.x[ part_offset ];
+    float3 __restrict__ *u   = &data.u[ part_offset ];
 
     for( int i = threadIdx.x; i < np; i+= blockDim.x ) {
         float3 pu = u[i];
@@ -647,8 +642,7 @@ void Species::move( VectorField * J )
     size_t shm_size = ext_nx.x * ext_nx.y * sizeof(float3);
 
     _move_deposit_kernel <<< grid, block, shm_size >>> ( 
-        particles -> tiles, 
-        particles -> ix, particles -> x, particles -> u,
+        particles -> tiles, particles -> data,
         J -> d_buffer, J -> offset(), ext_nx, dt_dx, q, qnx,
         d_nmove
     );
@@ -665,8 +659,7 @@ __global__
  * @param dt_dx             Time step over cell size
  */
 void _move_kernel(
-    t_part_tiles tiles,
-    int2* __restrict__ d_ix, float2* __restrict__ d_x, float3* __restrict__ d_u,
+    t_part_tiles const tiles, t_part_data const data,
     float2 const dt_dx, 
     unsigned long long * const __restrict__ d_nmove ) 
 {
@@ -678,9 +671,9 @@ void _move_kernel(
 
     const int part_offset = tiles.offset[ tid ];
     const int np     = tiles.np[ tid ];
-    int2   __restrict__ *ix  = &d_ix[ part_offset ];
-    float2 __restrict__ *x   = &d_x[ part_offset ];
-    float3 __restrict__ *u   = &d_u[ part_offset ];
+    int2   __restrict__ *ix  = &data.ix[ part_offset ];
+    float2 __restrict__ *x   = &data.x[ part_offset ];
+    float3 __restrict__ *u   = &data.u[ part_offset ];
 
     for( int i = threadIdx.x; i < np; i+= blockDim.x ) {
         float3 pu = u[i];
@@ -745,8 +738,7 @@ void Species::move( )
     dim3 block( 1024 );
 
     _move_kernel <<< grid, block >>> ( 
-        particles -> tiles,
-        particles -> ix, particles -> x, particles -> u,
+        particles -> tiles, particles -> data,
         dt_dx, d_nmove
     );
 
@@ -1002,8 +994,7 @@ void interpolate_fld(
 template < species::pusher type >
 __global__
 void _push_kernel ( 
-    t_part_tiles tiles,
-    int2* __restrict__ d_ix, float2* __restrict__ d_x, float3* __restrict__ d_u,
+    t_part_tiles const tiles, t_part_data const data,
     float3 * __restrict__ d_E, float3 * __restrict__ d_B, 
     unsigned int const field_offset, uint2 const ext_nx,
     float const alpha, double * const __restrict__ d_energy )
@@ -1033,9 +1024,9 @@ void _push_kernel (
     // Push particles
     const int part_offset = tiles.offset[ tid ];
     const int np          = tiles.np[ tid ];
-    int2   __restrict__ *ix  = &d_ix[ part_offset ];
-    float2 __restrict__ *x   = &d_x[ part_offset ];
-    float3 __restrict__ *u   = &d_u[ part_offset ];
+    int2   __restrict__ *ix  = &data.ix[ part_offset ];
+    float2 __restrict__ *x   = &data.x[ part_offset ];
+    float3 __restrict__ *u   = &data.u[ part_offset ];
 
     double energy = 0;
 
@@ -1089,16 +1080,14 @@ void Species::push( VectorField * const E, VectorField * const B )
     switch( push_type ) {
     case( species :: euler ):
         _push_kernel <species::euler> <<< grid, block, shm_size >>> (
-            particles -> tiles, 
-            particles -> ix, particles -> x, particles -> u,
+            particles -> tiles, particles -> data,
             E -> d_buffer, B -> d_buffer, E -> offset(), ext_nx, alpha,
             d_energy
         );
         break;
     case( species :: boris ):
         _push_kernel <species::boris> <<< grid, block, shm_size >>> (
-            particles -> tiles, 
-            particles -> ix, particles -> x, particles -> u,
+            particles -> tiles, particles -> data,
             E -> d_buffer, B -> d_buffer, E -> offset(), ext_nx, alpha,
             d_energy
         );
@@ -1122,8 +1111,8 @@ __global__
 void _dep_charge_kernel(
     float * const __restrict__ d_charge,
     int offset, uint2 ext_nx,
-    t_part_tiles tiles,
-    int2 const * const __restrict__ d_ix, float2 const * const __restrict__ d_x, const float q )
+    t_part_tiles const tiles, t_part_data const data,
+    const float q )
 {
     auto block = cg::this_thread_block();
 
@@ -1140,8 +1129,8 @@ void _dep_charge_kernel(
     const int tid = (blockIdx.y * gridDim.x) + blockIdx.x;
     const int part_off =  tiles.offset[ tid ];
     const int np = tiles.np[ tid ];
-    int2   __restrict__ const * const ix = &d_ix[ part_off ];
-    float2 __restrict__ const * const x  = &d_x[ part_off ];
+    int2   __restrict__ const * const ix = &data.ix[ part_off ];
+    float2 __restrict__ const * const x  = &data.x[ part_off ];
     const int ystride = ext_nx.x;
 
     for( int i = threadIdx.x; i < np; i += blockDim.x ) {
@@ -1182,8 +1171,7 @@ void Species::deposit_charge( Field &charge ) const {
 
     _dep_charge_kernel <<< grid, block, shm_size >>> (
         charge.d_buffer, charge.offset(), ext_nx,
-        particles -> tiles,
-        particles -> ix, particles -> x, q
+        particles -> tiles, particles -> data, q
     );
 
 }
@@ -1310,16 +1298,16 @@ template < phasespace::quant q >
 __global__ void _dep_pha1_kernel( 
     float * const __restrict__ d_data, float2 const range, unsigned const size,
     uint2 const tile_nx, float const norm, 
-    t_part_tiles tiles,
-    int2* __restrict__ d_ix, float2* __restrict__ d_x, float3* __restrict__ d_u )
+    t_part_tiles const tiles,
+    t_part_data const data )
 {
     const int tid = blockIdx.y * gridDim.x + blockIdx.x;
 
     const int part_offset = tiles.offset[ tid ];
     const int np     = tiles.np[ tid ];
-    int2   __restrict__ *ix  = &d_ix[ part_offset ];
-    float2 __restrict__ *x   = &d_x[ part_offset ];
-    float3 __restrict__ *u   = &d_u[ part_offset ];
+    int2   __restrict__ *ix  = &data.ix[ part_offset ];
+    float2 __restrict__ *x   = &data.x[ part_offset ];
+    float3 __restrict__ *u   = &data.u[ part_offset ];
 
     float const pha_rdx = size / (range.y - range.x);
 
@@ -1373,7 +1361,7 @@ void Species::dep_phasespace( float * const d_data, phasespace::quant quant,
         _dep_pha1_kernel<phasespace::x> <<< grid, block >>> (
             d_data, range, size, particles -> nx, norm, 
             particles -> tiles,
-            particles -> ix, particles -> x, particles -> u
+            particles -> data
         );
         break;
     case( phasespace:: y ):
@@ -1382,28 +1370,28 @@ void Species::dep_phasespace( float * const d_data, phasespace::quant quant,
         _dep_pha1_kernel<phasespace::y> <<< grid, block >>> (
             d_data, range, size, particles -> nx, norm, 
             particles -> tiles,
-            particles -> ix, particles -> x, particles -> u
+            particles -> data
         );
         break;
     case( phasespace:: ux ):
         _dep_pha1_kernel<phasespace::ux> <<< grid, block >>> (
             d_data, range, size, particles -> nx, norm, 
             particles -> tiles,
-            particles -> ix, particles -> x, particles -> u
+            particles -> data
         );
         break;
     case( phasespace:: uy ):
         _dep_pha1_kernel<phasespace::uy> <<< grid, block >>> (
             d_data, range, size, particles -> nx, norm, 
             particles -> tiles,
-            particles -> ix, particles -> x, particles -> u
+            particles -> data
         );
         break;
     case( phasespace:: uz ):
         _dep_pha1_kernel<phasespace::uz> <<< grid, block >>> (
             d_data, range, size, particles -> nx, norm, 
             particles -> tiles,
-            particles -> ix, particles -> x, particles -> u
+            particles -> data
         );
         break;
     };
@@ -1498,8 +1486,7 @@ __global__ void _dep_pha2_kernel(
     float2 const range0, unsigned int const size0,
     float2 const range1, unsigned int const size1,
     uint2 const tile_nx, float const norm, 
-    t_part_tiles tiles,
-    int2* __restrict__ d_ix, float2* __restrict__ d_x, float3* __restrict__ d_u )
+    t_part_tiles const tiles, t_part_data const data )
 {
     static_assert( quant1 > quant0, "quant1 must be > quant0" );
     
@@ -1507,9 +1494,9 @@ __global__ void _dep_pha2_kernel(
 
     const int part_offset = tiles.offset[ tid ];
     const int np     = tiles.np[ tid ];
-    int2   __restrict__ *ix  = &d_ix[ part_offset ];
-    float2 __restrict__ *x   = &d_x[ part_offset ];
-    float3 __restrict__ *u   = &d_u[ part_offset ];
+    int2   __restrict__ *ix  = &data.ix[ part_offset ];
+    float2 __restrict__ *x   = &data.x[ part_offset ];
+    float3 __restrict__ *u   = &data.u[ part_offset ];
 
     float const pha_rdx0 = size0 / (range0.y - range0.x);
     float const pha_rdx1 = size1 / (range1.y - range1.x);
@@ -1592,29 +1579,25 @@ void Species::dep_phasespace(
 
             _dep_pha2_kernel<phasespace::x,phasespace::y> <<< grid, block >>> (
                 d_data, range0, size0, range1, size1, particles -> nx, norm, 
-                particles -> tiles,
-                particles -> ix, particles -> x, particles -> u
+                particles -> tiles, particles -> data
             );
             break;
         case( phasespace::ux ):
             _dep_pha2_kernel<phasespace::x,phasespace::ux> <<< grid, block >>> (
                 d_data, range0, size0, range1, size1, particles -> nx, norm, 
-                particles -> tiles,
-                particles -> ix, particles -> x, particles -> u
+                particles -> tiles, particles -> data
             );
             break;
         case( phasespace::uy ):
             _dep_pha2_kernel<phasespace::x,phasespace::uy> <<< grid, block >>> (
                 d_data, range0, size0, range1, size1, particles -> nx, norm, 
-                particles -> tiles,
-                particles -> ix,particles -> x, particles -> u
+                particles -> tiles, particles -> data
             );
             break;
         case( phasespace::uz ):
             _dep_pha2_kernel<phasespace::x,phasespace::uz> <<< grid, block >>> (
                 d_data, range0, size0, range1, size1, particles -> nx, norm, 
-                particles -> tiles,
-                particles -> ix, particles -> x, particles -> u
+                particles -> tiles, particles -> data
             );
             break;
         }
@@ -1626,22 +1609,19 @@ void Species::dep_phasespace(
         case( phasespace::ux ):
             _dep_pha2_kernel<phasespace::y,phasespace::ux> <<< grid, block >>> (
                 d_data, range0, size0, range1, size1, particles -> nx, norm, 
-                particles -> tiles,
-                particles -> ix, particles -> x, particles -> u
+                particles -> tiles, particles -> data
             );
             break;
         case( phasespace::uy ):
             _dep_pha2_kernel<phasespace::y,phasespace::uy> <<< grid, block >>> (
                 d_data, range0, size0, range1, size1, particles -> nx, norm, 
-                particles -> tiles,
-                particles -> ix, particles -> x, particles -> u
+                particles -> tiles, particles -> data
             );
             break;
         case( phasespace::uz ):
             _dep_pha2_kernel<phasespace::y,phasespace::uz> <<< grid, block >>> (
                 d_data, range0, size0, range1, size1, particles -> nx, norm, 
-                particles -> tiles,
-                particles -> ix, particles -> x, particles -> u
+                particles -> tiles, particles -> data
             );
             break;
         }
@@ -1651,15 +1631,13 @@ void Species::dep_phasespace(
         case( phasespace::uy ):
             _dep_pha2_kernel<phasespace::ux,phasespace::uy> <<< grid, block >>> (
                 d_data, range0, size0, range1, size1, particles -> nx, norm, 
-                particles -> tiles,
-                particles -> ix, particles -> x, particles -> u
+                particles -> tiles, particles -> data
             );
             break;
         case( phasespace::uz ):
             _dep_pha2_kernel<phasespace::ux,phasespace::uz> <<< grid, block >>> (
                 d_data, range0, size0, range1, size1, particles -> nx, norm, 
-                particles -> tiles,
-                particles -> ix, particles -> x, particles -> u
+                particles -> tiles, particles -> data
             );
             break;
         }
@@ -1667,8 +1645,7 @@ void Species::dep_phasespace(
     case( phasespace:: uy ):
         _dep_pha2_kernel<phasespace::uy,phasespace::uz> <<< grid, block >>> (
             d_data, range0, size0, range1, size1, particles -> nx, norm, 
-            particles -> tiles,
-            particles -> ix, particles -> x, particles -> u
+            particles -> tiles, particles -> data
         );
         break;
     };

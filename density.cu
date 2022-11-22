@@ -17,8 +17,8 @@ __global__
  */
 void _inject_uniform_kernel( bnd<unsigned int> range,
     uint2 const ppc, uint2 const nx, 
-    t_part_tiles tiles,
-    int2 * __restrict__ d_ix, float2 * __restrict__ d_x, float3 * __restrict__ d_u )
+    t_part_tiles const tiles,
+    t_part_data const data )
 {
 
     auto block = cg::this_thread_block();
@@ -58,9 +58,9 @@ void _inject_uniform_kernel( bnd<unsigned int> range,
         int const vol = (rj1-rj0+1) * row;
 
         const int offset =  tiles.offset[ tid ];
-        int2   * __restrict__ const ix = &d_ix[ offset ];
-        float2 * __restrict__ const x  = &d_x[ offset ];
-        float3 * __restrict__ const u  = &d_u[ offset ];
+        int2   * __restrict__ const ix = &data.ix[ offset ];
+        float2 * __restrict__ const x  = &data.x[ offset ];
+        float3 * __restrict__ const u  = &data.u[ offset ];
 
         const int np_cell = ppc.x * ppc.y;
 
@@ -104,8 +104,7 @@ void Density::Uniform::inject( Particles * part,
 
     _inject_uniform_kernel <<< grid, block >>> ( 
             range, ppc, part -> nx, 
-            part -> tiles,
-            part -> ix, part -> x, part -> u );
+            part -> tiles, part -> data );
 }
 
 
@@ -127,8 +126,7 @@ template < coord::cart dir >
 __global__
 void _inject_step_kernel( bnd<unsigned int> range,
     const float step, const uint2 ppc, const uint2 nx,
-    t_part_tiles tiles,
-    int2* __restrict__ d_ix, float2* __restrict__ d_x, float3* __restrict__ d_u )
+    t_part_tiles const tiles, t_part_data const data )
 {
 
     auto block = cg::this_thread_block();
@@ -169,9 +167,9 @@ void _inject_step_kernel( bnd<unsigned int> range,
         int const vol = (rj1-rj0+1) * row;
 
         const int offset =  tiles.offset[ tid ];
-        int2   __restrict__ *ix = &d_ix[ offset ];
-        float2 __restrict__ *x  = &d_x[ offset ];
-        float3 __restrict__ *u  = &d_u[ offset ];
+        int2   __restrict__ *ix = &data.ix[ offset ];
+        float2 __restrict__ *x  = &data.x[ offset ];
+        float3 __restrict__ *u  = &data.u[ offset ];
 
         double dpcx = 1.0 / ppc.x;
         double dpcy = 1.0 / ppc.y;
@@ -222,14 +220,12 @@ void Density::Step::inject( Particles * part,
     case( coord::x ):
         _inject_step_kernel <coord::x> <<< grid, block >>> (
             range, step_pos, ppc, part -> nx, 
-            part -> tiles,
-            part -> ix, part -> x, part -> u );
+            part -> tiles, part -> data );
         break;
     case( coord::y ):
         _inject_step_kernel <coord::y> <<< grid, block >>> (
             range, step_pos, ppc, part -> nx, 
-            part -> tiles,
-            part -> ix, part -> x, part -> u );
+            part -> tiles, part -> data );
         break;
     break;
     }
@@ -253,8 +249,7 @@ template < coord::cart dir >
 __global__
 void _inject_slab_kernel( bnd<unsigned int> range,
     const float start, const float finish, uint2 ppc, uint2 nx,
-    t_part_tiles tiles,
-    int2* __restrict__ d_ix, float2* __restrict__ d_x, float3* __restrict__ d_u )
+    t_part_tiles const tiles, t_part_data const data )
 {
     auto block = cg::this_thread_block();
 
@@ -294,9 +289,9 @@ void _inject_slab_kernel( bnd<unsigned int> range,
         int const vol = (rj1-rj0+1) * row;
 
         const int offset =  tiles.offset[ tid ];
-        int2   __restrict__ *ix = &d_ix[ offset ];
-        float2 __restrict__ *x  = &d_x[ offset ];
-        float3 __restrict__ *u  = &d_u[ offset ];
+        int2   __restrict__ *ix = &data.ix[ offset ];
+        float2 __restrict__ *x  = &data.x[ offset ];
+        float3 __restrict__ *u  = &data.u[ offset ];
 
         double dpcx = 1.0 / ppc.x;
         double dpcy = 1.0 / ppc.y;
@@ -349,14 +344,12 @@ void Density::Slab::inject( Particles * part,
     case( coord::x ):
         _inject_slab_kernel < coord::x > <<< grid, block >>> (
             range, slab_begin, slab_end, ppc, part -> nx, 
-            part -> tiles,
-            part -> ix, part -> x, part -> u  );
+            part -> tiles, part -> data );
         break;
     case( coord::y ):
         _inject_slab_kernel < coord::y > <<< grid, block >>> (
             range, slab_begin, slab_end, ppc, part -> nx, 
-            part -> tiles,
-            part -> ix, part -> x, part -> u  );
+            part -> tiles, part -> data );
         break;
     }
 
@@ -381,8 +374,7 @@ void Density::Slab::inject( Particles * part,
 __global__
 void _inject_sphere_kernel( bnd<unsigned int> range,
     float2 center, float radius, float2 dx, uint2 ppc, uint2 nx,
-    t_part_tiles tiles,
-    int2* __restrict__ d_ix, float2* __restrict__ d_x, float3* __restrict__ d_u )
+    t_part_tiles const tiles, t_part_data const data )
 {
 
     auto block = cg::this_thread_block();
@@ -424,9 +416,9 @@ void _inject_sphere_kernel( bnd<unsigned int> range,
         int const vol = (rj1-rj0+1) * row;
 
         const int offset =  tiles.offset[ tid ];
-        int2   __restrict__ *ix = &d_ix[ offset ];
-        float2 __restrict__ *x  = &d_x[ offset ];
-        float3 __restrict__ *u  = &d_u[ offset ];
+        int2   __restrict__ *ix = &data.ix[ offset ];
+        float2 __restrict__ *x  = &data.x[ offset ];
+        float3 __restrict__ *u  = &data.u[ offset ];
 
         double dpcx = 1.0 / ppc.x;
         double dpcy = 1.0 / ppc.y;
@@ -477,6 +469,5 @@ void Density::Sphere::inject( Particles * part,
 
     _inject_sphere_kernel <<< grid, block >>> (
         range, sphere_center, radius, dx, ppc, part -> nx, 
-        part -> tiles,
-        part -> ix, part -> x, part -> u  );
+        part -> tiles, part -> data );
 }

@@ -5,6 +5,10 @@
 * Thermal boundaries for particles
 * Improve particle tile sorter, make it production ready
 
+## 2022.11.22
+
+* Groups particle data into `t_part_data` structure for simpler kernel calls
+
 ## 2022.11.17
 
 * Adds performance measurements

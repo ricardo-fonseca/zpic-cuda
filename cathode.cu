@@ -194,8 +194,7 @@ void _inject_cathode_lower(
     float * const d_inj_pos, float const ufl,
     float3 uth, uint2 seed,  uint2 const ppc,
     uint2 const ntiles, uint2 const nx, 
-    t_part_tiles tiles,
-    int2 * __restrict__ d_ix, float2 * __restrict__ d_x, float3 * __restrict__ d_u )
+    t_part_tiles const tiles, t_part_data const data )
 {
     auto block = cg::this_thread_block();
     auto warp  = cg::tiled_partition<32>(block);
@@ -210,9 +209,9 @@ void _inject_cathode_lower(
     rand_init( seed, state, norm );
 
     const int offset =  tiles.offset[ tid ];
-    int2   * __restrict__ const ix = &d_ix[ offset ];
-    float2 * __restrict__ const x  = &d_x[ offset ];
-    float3 * __restrict__ const u  = &d_u[ offset ];
+    int2   * __restrict__ const ix = &data.ix[ offset ];
+    float2 * __restrict__ const x  = &data.x[ offset ];
+    float3 * __restrict__ const u  = &data.u[ offset ];
 
     int np = tiles.np[ tid ];
 
@@ -290,8 +289,7 @@ void _inject_cathode_upper(
     float * const d_inj_pos, float const ufl,
     float3 uth, uint2 seed,  uint2 const ppc,
     uint2 const ntiles, uint2 const nx, 
-    t_part_tiles tiles,
-    int2 * __restrict__ d_ix, float2 * __restrict__ d_x, float3 * __restrict__ d_u )
+    t_part_tiles const tiles, t_part_data const data )
 {
     auto block = cg::this_thread_block();
     auto warp  = cg::tiled_partition<32>(block);
@@ -306,9 +304,9 @@ void _inject_cathode_upper(
     rand_init( seed, state, norm );
 
     const int offset =  tiles.offset[ tid ];
-    int2   * __restrict__ const ix = &d_ix[ offset ];
-    float2 * __restrict__ const x  = &d_x[ offset ];
-    float3 * __restrict__ const u  = &d_u[ offset ];
+    int2   * __restrict__ const ix = &data.ix[ offset ];
+    float2 * __restrict__ const x  = &data.x[ offset ];
+    float3 * __restrict__ const u  = &data.u[ offset ];
 
     int np = tiles.np[ tid ];
 
@@ -397,8 +395,7 @@ void Cathode::advance( EMF const &emf, Current &current )
             _inject_cathode_lower <<< grid, block, shm_size >>> (
                 d_inj_pos, ufl, uth, rnd_seed, ppc, 
                 particles -> ntiles, particles -> nx,
-                particles -> tiles, 
-                particles -> ix, particles -> x, particles -> u
+                particles -> tiles, particles -> data
             );
             break;
         
@@ -408,8 +405,7 @@ void Cathode::advance( EMF const &emf, Current &current )
             _inject_cathode_upper <<< grid, block, shm_size >>> (
                 d_inj_pos, ufl, uth, rnd_seed, ppc, 
                 particles -> ntiles, particles -> nx, 
-                particles -> tiles, 
-                particles -> ix, particles -> x, particles -> u
+                particles -> tiles, particles -> data
             );
             break;
         }

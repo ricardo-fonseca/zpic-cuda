@@ -8,10 +8,32 @@ namespace part {
     enum quant { x, y, ux, uy, uz };
 }
 
-typedef struct ParticlesTiles {
+/**
+ * @brief Individual particle data
+ * 
+ * Data is organized as a structure of arrays (SoA) and stored on device
+ * 
+ */
+typedef struct ParticleData {
+    /// @brief Particle position (cell index)
+    int2 *ix;
+    /// @brief Particle position (position inside cell)
+    float2 *x;
+    /// @brief Particle velocity
+    float3 *u;
+} t_part_data;
 
+/**
+ * @brief Tile information
+ * 
+ */
+typedef struct ParticleTiles {
+
+    /// @brief Number of particles in tile
     int * np;
+    /// @brief Tile particle position on global array
     int * offset;
+    /// @brief Secondary number of particles in tile
     int * np2;
 
 } t_part_tiles;
@@ -25,18 +47,32 @@ class Particles {
 
     public:
 
-    uint2 ntiles;
-    uint2 nx;       // Tile grid size (valid ix is in the range 0 .. nx-1)
-
+    /// @brief Sets periodic boundaries (x,y)
     int2 periodic;
 
-    // Device data pointers
-    int2 *ix;
-    float2 *x;
-    float3 *u;
+    /// @brief Number of tiles (x,y)
+    uint2 ntiles;
+    
+    /**
+     * @brief Tile grid size (x,y)
+     * 
+     * Valid ix is in the range 0 .. nx-1
+     */
+    uint2 nx;
+
+    /// @brief Tile information
+    t_part_tiles tiles;
+
+    /// @brief Particle data
+    t_part_data data;
+
+    /**
+     * @brief Indices of particles moving to another tile
+     * 
+     * (Device data)
+     */
     int *idx;
 
-    t_part_tiles tiles;
 
 
     __host__
@@ -44,9 +80,9 @@ class Particles {
 
     __host__
     ~Particles() {
-        free_dev( u );
-        free_dev( x );
-        free_dev( ix );
+        free_dev( data.u );
+        free_dev( data.x );
+        free_dev( data.ix );
         free_dev( idx );
 
         free_dev( tiles.np );

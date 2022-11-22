@@ -9,7 +9,7 @@ __global__
  * @param d_u 
  */
 void _set_none( 
-    t_part_tiles tiles,
+    t_part_tiles const tiles,
     float3 * const __restrict__ d_u ) {
 
     const int tid = blockIdx.y * gridDim.x + blockIdx.x;
@@ -33,7 +33,7 @@ void UDistribution::None::set( Particles & part, unsigned int seed ) const {
     dim3 grid( part.ntiles.x, part.ntiles.y );
     dim3 block( 64 );
     
-    _set_none <<< grid, block >>> ( part.tiles, part.u );
+    _set_none <<< grid, block >>> ( part.tiles, part.data.u );
 }
 
 __global__
@@ -45,7 +45,7 @@ __global__
  * @param ufl 
  */
 void _set_cold( 
-    t_part_tiles tiles,
+    t_part_tiles const tiles,
     float3 * const __restrict__ d_u, float3 const ufl ) {
 
     const int tid = blockIdx.y * gridDim.x + blockIdx.x;
@@ -69,7 +69,7 @@ void UDistribution::Cold::set( Particles & part, unsigned int seed ) const {
     dim3 grid( part.ntiles.x, part.ntiles.y );
     dim3 block( 64 );
     
-    _set_cold <<< grid, block >>> ( part.tiles, part.u, ufl );
+    _set_cold <<< grid, block >>> ( part.tiles, part.data.u, ufl );
 }
 
 
@@ -84,7 +84,7 @@ __global__
  * @param ufl       Fluid momentum
  */
 void _set_thermal(
-    t_part_tiles tiles,
+    t_part_tiles const tiles,
     float3 * const __restrict__ d_u, 
     const uint2 seed, const float3 uth, const float3 ufl ) {
 
@@ -122,7 +122,7 @@ void UDistribution::Thermal::set( Particles & part, unsigned int seed ) const {
     
     uint2 rnd_seed = {12345 + seed, 67890 };
     _set_thermal <<< grid, block >>> ( 
-        part.tiles, part.u, rnd_seed, uth, ufl
+        part.tiles, part.data.u, rnd_seed, uth, ufl
     );
 }
 
@@ -131,8 +131,6 @@ __global__
  * @brief Sets particle momentum correcting local ufl fluctuations
  * 
  * @param d_tile    Tile information
- * @param d_u       Particle buffer (momenta)
- * @param d_ix      Particle buffer (momenta)
  * @param nx        Tile size
  * @param seed      Seed for random number generator
  * @param uth       Thermal distribution width
@@ -140,8 +138,8 @@ __global__
  * @param npmin     Minimum number of particles in cell to apply correction
  */
 void _set_thermal_corr( 
-    t_part_tiles tiles,
-    float3 * const __restrict__ d_u, int2 const * const __restrict__ d_ix, uint2 const nx, 
+    t_part_tiles const tiles, t_part_data const data,
+    uint2 const nx, 
     uint2 const seed, float3 const uth, float3 const ufl, int const npmin ) {
 
     auto block = cg::this_thread_block();
@@ -170,8 +168,8 @@ void _set_thermal_corr(
     // Set particle momenta
     const int offset = tiles.offset[tid];
     const int np     = tiles.np[tid];
-    float3 * const __restrict__ u  = &d_u[ offset ];
-    int2 const * const __restrict__ ix = &d_ix[offset];
+    float3     * const __restrict__ u  = &data.u[ offset ];
+    int2 const * const __restrict__ ix = &data.ix[offset];
 
     for( int i = threadIdx.x; i < np; i+= blockDim.x ) {
         float3 upart = make_float3(
@@ -229,7 +227,7 @@ void UDistribution::ThermalCorr::set( Particles & part, unsigned int seed ) cons
     
     uint2 rnd_seed = {12345 + seed, 67890 };
     _set_thermal_corr <<< grid, block, shm_size >>> ( 
-        part.tiles, part.u, part.ix, part.nx,
+        part.tiles, part.data, part.nx,
         rnd_seed, uth, ufl, npmin
     );
 }
