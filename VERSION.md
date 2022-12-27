@@ -5,6 +5,11 @@
 * Thermal boundaries for particles
 * Improve particle tile sorter, make it production ready
 
+## 2022.12.27
+
+* Improves on particle tile sorter. Particles are checked for leaving tile inside the
+  pusher.
+
 ## 2022.11.22
 
 * Groups particle data into `t_part_data` structure for simpler kernel calls
@@ -64,7 +69,7 @@ __CRITICAL:__ Fixes critical issues
 
 __CRITICAL:__ Fixes critical issues
 
-* Fixes critical issue in Field and VectorField `::add_from_gc()` method.
+* Fixes critical issue in Field and VectorField `::add_from_gc()` methods.
   * Adding in values from an upper neighbor was not done properly.
 * Fixes critical issue with `pusher::euler`, rotation matrix was not properly implemented
 

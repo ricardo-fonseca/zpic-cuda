@@ -17,7 +17,7 @@ Elapsed time was: 5.148 s
 
 1. Replace the scan / reduce operations with atomic adds
     * Atomics are now very fast (especially in shared memory), and they will only be called for particles crossing the node
-    * Immediately allows for arbitrary number of threads (previous version limited to 1 warp)
+    * Immediately allows for an arbitrary number of threads (previous version limited to 1 warp)
 
 ```text
 Elapsed time was: 2.619 s
@@ -87,6 +87,23 @@ This leads to a marginal speedup of 1.03x.
 
 The speedup was __2.42 x__ for the `bnd_out` routines, __1.20 x__ overall.
 
+6. Inside the `move_deposit` routine, check if particles have left the tile in any direction, and store indices in temp. buffer if so. The `bnd_out` and `bnd_in` routines process all particles in the index.
+   * The `bnd_out` routines are more complex because they need to re-check if particles are leaving the boundary being processed
+   * The `bnd_in` routines must add the indices of incoming particles (x boundary) to the temp. buffer, so they can later be checked for y crossings.
+
+```text
+==171559== Profiling application: ./zpic-cuda
+==171559== Profiling result:
+            Type  Time(%)      Time     Calls       Avg       Min       Max  Name
+ GPU activities:   64.90%  1.07795s      1000  1.0779ms  722.52us  10.838ms  _move_deposit_kernel(ParticleTiles, ParticleData, int2, int*, float3*, unsigned int, uint2, float2, float, float2, __int64*)
+                   23.29%  386.90ms      1000  386.90us  350.53us  475.96us  void _push_kernel<species::pusher>(ParticleTiles, ParticleData, float3*, float3*, unsigned int, uint2, float, double*)
+                    3.25%  53.990ms      1000  53.989us  29.888us  85.727us  void _bnd_out<coord::cart>(int2, ParticleTiles, ParticleData, int*, ParticleTiles, ParticleData)
+                    3.19%  52.977ms      1000  52.977us  25.537us  81.919us  void _bnd_out<coord::cart>(int2, ParticleTiles, ParticleData, int*, ParticleTiles, ParticleData)
+                    1.11%  18.421ms      1000  18.420us  16.096us  21.439us  void _bnd_in<coord::cart>(int2, ParticleTiles, ParticleData, int*, ParticleTiles, ParticleData, int2)
+                    1.11%  18.393ms      1000  18.392us  15.968us  21.759us  void _bnd_in<coord::cart>(int2, ParticleTiles, ParticleData, int*, ParticleTiles, ParticleData, int2)
+```
+
+The speedup for the tile sort routines (including the additional overhead inside `mode_deposit`) was __1.77 x__, __1.05 x__ overall.
 
 ## Current deposit
 

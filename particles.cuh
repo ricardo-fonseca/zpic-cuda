@@ -36,6 +36,9 @@ typedef struct ParticleTiles {
     /// @brief Secondary number of particles in tile
     int * np2;
 
+    /// @brief Number of particles in index list
+    int * nidx;
+
 } t_part_tiles;
 
 class Particles {
@@ -86,6 +89,7 @@ class Particles {
         free_dev( idx );
 
         free_dev( tiles.np );
+        free_dev( tiles.nidx );
         free_dev( tiles.offset );
         free_dev( tiles.np2 );
     }
@@ -154,6 +158,7 @@ class Particles {
      */
     void tile_sort( );
     void tile_sort( Particles &tmp );
+    void tile_sort_idx( Particles &tmp );
 
     __host__
     void save( zdf::part_info &info, zdf::iteration &iter, std::string path );

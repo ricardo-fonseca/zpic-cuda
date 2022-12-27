@@ -47,6 +47,8 @@ Particles::Particles(uint2 const ntiles, uint2 const nx, unsigned int const max_
     malloc_dev( tiles.np, ntiles.x * ntiles.y );
     malloc_dev( tiles.np2, ntiles.x * ntiles.y );
 
+    malloc_dev( tiles.nidx, ntiles.x * ntiles.y );
+
     dim3 grid( ntiles.x, ntiles.y );
     _init_tiles_kernel <<< grid, 1 >>> ( tiles, max_np_tile );
 };
@@ -375,23 +377,42 @@ void Particles::save( zdf::part_info &info, zdf::iteration &iter, std::string pa
     free_dev( d_out_offset );
 }
 
-/**
- * @brief CUDA kernel for copying particles out of the tile to a temp buffer
- * 
- * @tparam dir          Direction to check `coord::x` or `coord::y`
- * @param lim           Tile size along chosen direction
- * @param d_tiles       Tile information (main buffer)
- * @param d_ix          Particle cells (main buffer)
- * @param d_x           Particle positions (main buffer)
- * @param d_u           Particle momenta (main buffer)
- * @param tmp_d_tiles   Tile information (temp buffer)
- * @param tmp_d_ix      Particle cells (temp buffer)
- * @param tmp_d_x       Particle positions (temp buffer)
- * @param tmp_d_u       Particle generalized velocity (temp buffer)
- */
+
+__global__
+void _bnd_out_check( int2 const lim, 
+    t_part_tiles const tiles, t_part_data const data, int * __restrict__ d_idx )
+{
+    auto block = cg::this_thread_block();
+    auto warp  = cg::tiled_partition<32>(block);
+
+    const int tid = blockIdx.y * gridDim.x + blockIdx.x;
+
+    unsigned int const np = tiles.np[ tid ];
+    unsigned int const offset =  tiles.offset[ tid ];
+    int2   * __restrict__ ix  = &data.ix[ offset ];
+    int * __restrict__ idx = &d_idx[ offset ];
+
+    __shared__ int _nout;
+    _nout = 0;
+    block.sync();
+
+    for( int i = block.thread_rank(); i < np; i+= block.num_threads() ) {
+        int out = (ix[i].x < 0) || (ix[i].x >= lim.x) || 
+                  (ix[i].y < 0) || (ix[i].y >= lim.y);
+        
+        if (out) {
+            int k = atomicAdd( &_nout, 1 );
+            idx[k] = i;
+        }
+    }
+    block.sync();
+
+    if ( block.thread_rank() == 0 ) tiles.nidx[ tid ] = _nout;
+}
+
 template < coord::cart dir >
 __global__
-void _bnd_out( int const lim, 
+void _bnd_out( int2 const lim, 
     t_part_tiles const tiles, t_part_data const data, int * __restrict__ d_idx,
     t_part_tiles const tmp_tiles, t_part_data tmp_data )
 {
@@ -407,6 +428,7 @@ void _bnd_out( int const lim,
     float3 * __restrict__ u   = &data.u[ offset ];
 
     int * __restrict__ idx = &d_idx[ offset ];
+    unsigned int const nidx = tiles.nidx[ tid ];
 
     unsigned int const tmp_offset =  tmp_tiles.offset[ tid ];
     int2   * __restrict__ tmp_ix = &tmp_data.ix[ tmp_offset ];
@@ -414,107 +436,110 @@ void _bnd_out( int const lim,
     float3 * __restrict__ tmp_u  = &tmp_data.u[ tmp_offset ];
 
 
-    // Total number of particles leaving
-    __shared__ int _nmove;
+    // Number of particles leaving to the lower neighbour
+    __shared__ int _nl;
 
-    // Number of particle leaving to the left neighbour
-    __shared__ int _n1;
+    // Number of particles leaving to the upper neighbour
+    __shared__ int _nu;
 
-    _nmove = 0;
-    _n1 = 0;
+    _nl = _nu = 0;
 
     block.sync();
 
-    int n1 = 0;
+    int nl = 0;
+    int nu = 0;
 
-    for( int i = block.thread_rank(); i < np; i+= block.num_threads() ) {
-        int ipos;
-        if ( dir == coord::x ) ipos = ix[i].x;
-        if ( dir == coord::y ) ipos = ix[i].y;
-
-        n1 += ( ipos < 0 );
-
-        if ( ( ipos < 0 ) || ( ipos >= lim ) ) {
-            int k = atomicAdd( &_nmove, 1 );
-            idx[k] = i;
+    for( int i = block.thread_rank(); i < nidx; i+= block.num_threads() ) {
+        
+        int k = idx[i];
+        
+        if ( k < np ) {
+            if ( dir == coord::x ) {
+                nl += ( ix[k].x < 0 );
+                nu += ( ix[k].x >= lim.x );
+            }
+            if ( dir == coord::y ) {
+                nl += ( ix[k].y < 0 );
+                nu += ( ix[k].y >= lim.y );
+            }
         }
     }
 
-    n1 = cg::reduce( warp, n1, cg::plus<int>());
-    if ( warp.thread_rank() == 0 ) atomicAdd( &_n1, n1 );
+    nl = cg::reduce( warp, nl, cg::plus<int>());
+    nu = cg::reduce( warp, nu, cg::plus<int>());
+    if ( warp.thread_rank() == 0 ) {
+        atomicAdd( &_nl, nl );
+        atomicAdd( &_nu, nu );
+    }
 
     block.sync();
 
     // Number of particles staying in node
-    int const _n0 = np - _nmove;
-
-    // Number of particles leaving to the right neighbour
-    int const _n2 = _nmove - _n1;
-
-    // Indices for tmp partilce buffer ( 0 - lower, 1 - upper )
-    __shared__ int _k[2];
-    _k[0] =   0;
-    _k[1] = _n1;
+    int const n0 = np - (_nl + _nu);
 
     // Index for copying back particles to fill holes
     __shared__ int _c;
-    _c = _n0;
+    _c = n0;
+
+    // Indices for tmp partilce buffer ( 0 - lower, 1 - upper )
+    __shared__ int _l[2];
+    _l[0] =   0;
+    _l[1] = _nl;
 
     block.sync();
 
-    for( int i = block.thread_rank(); i < _nmove; i+= block.num_threads() ) {
-        int src = idx[i];
+    for( int i = block.thread_rank(); i < nidx; i+= block.num_threads() ) {
+        int k = idx[i];
 
-        int ipos;
-        if ( dir == coord::x ) ipos = ix[src].x;
-        if ( dir == coord::y ) ipos = ix[src].y;
+        if ( k < np ) {
+            int bnd;
+            if ( dir == coord::x ) 
+                bnd = ( ix[k].x < 0 ) + 2 * ( ix[k].x >= lim.x );
+            if ( dir == coord::y )
+                bnd = ( ix[k].y < 0 ) + 2 * ( ix[k].y >= lim.y );
 
-        int bnd = ( ipos >= lim );
+            if ( bnd > 0 ) {
+                // Copy data to temp buffer
+                int l = atomicAdd( & _l[bnd-1], 1 );
 
-        int k = atomicAdd( & _k[bnd], 1 );
+                tmp_ix[l] = ix[k];
+                tmp_x[l]  = x[k];
+                tmp_u[l]  = u[k];
 
-        tmp_ix[k] = ix[src];
-        tmp_x[k]  = x[src];
-        tmp_u[k]  = u[src];
-    }
+                // Fill hole if needed
+                if ( k < n0 ) {
+                    int c, invalid;
 
-    block.sync();
+                    do {
+                        c = atomicAdd( &_c, 1 );
+                        if ( dir == coord::x ) 
+                            invalid = ( ix[c].x < 0 ) || ( ix[c].x >= lim.x);
+                        if ( dir == coord::y ) 
+                            invalid = ( ix[c].y < 0 ) || ( ix[c].y >= lim.y);
+                    } while (invalid);
 
-    for( int i = block.thread_rank(); i < _nmove; i+= block.num_threads() ) {
-
-        int tgt = idx[i];
-
-        if ( tgt < _n0 ) {
-            int c, ipos;
-
-            do {
-                c = atomicAdd( &_c, 1 );
-                if ( dir == coord::x ) ipos = ix[c].x;
-                if ( dir == coord::y ) ipos = ix[c].y;
-            } while (( ipos < 0 ) || ( ipos >= lim ));
-
-            ix[ tgt ] = ix[c];
-            x[ tgt ]  = x[c];
-            u[ tgt ]  = u[c];
+                    ix[ k ] = ix[ c ];
+                    x [ k ] = x [ c ];
+                    u [ k ] = u [ c ];
+                }
+            }
         }
     }
 
     // Store new values on tile information
     if ( block.thread_rank() == 0 ) {
-        tiles.np[ tid ]  = _n0;
-        tmp_tiles.np[ tid ]    = _n1;
-        tmp_tiles.np2[ tid ]   = _n2;
+        tiles.np[ tid ]      = n0;
+        tmp_tiles.np[ tid ]  = _nl;
+        tmp_tiles.np2[ tid ] = _nu;
     }
-
 }
-
 
 /**
  * @brief CUDA kernel for copying in particles that moved out of neighboring
  * tiles into the local tile.
  * 
  * @tparam dir          Direction to check `coord::x` or `coord::y`
- * @param lim           Tile size along chosen direction
+ * @param lim           Tile size along both directions
  * @param d_tiles       Tile information (main buffer)
  * @param d_ix          Particle cells (main buffer)
  * @param d_x           Particle positions (main buffer)
@@ -526,10 +551,10 @@ void _bnd_out( int const lim,
  */
 template < coord::cart dir > 
 __global__
-void _bnd_in( int const lim,
-    t_part_tiles const tiles, t_part_data const data,
+void _bnd_in( int2 const lim,
+    t_part_tiles const tiles, t_part_data const data, int * __restrict__ d_idx,
     t_part_tiles const tmp_tiles, t_part_data tmp_data,
-    int const periodic )
+    int2 const periodic )
 {
 
     auto grid  = cg::this_grid(); 
@@ -537,11 +562,20 @@ void _bnd_in( int const lim,
 
     const int tid = blockIdx.y * gridDim.x + blockIdx.x;
 
-    unsigned int n0  = tiles.np[ tid ];
+    const unsigned int n0  = tiles.np[ tid ];
+    unsigned int np = n0;
     const int offset =  tiles.offset[ tid ];
     int2   __restrict__ *ix = &data.ix[ offset ];
     float2 __restrict__ *x  = &data.x[ offset ];
     float3 __restrict__ *u  = &data.u[ offset ];
+
+    int * __restrict__ idx = &d_idx[ offset ];
+    unsigned int nidx = tiles.nidx[ tid ];
+
+    // Number of particles entering the node
+    int nin = 0;
+
+    block.sync();
 
     // Copy from upper neighbour
     int x_ucoord = blockIdx.x;
@@ -550,7 +584,7 @@ void _bnd_in( int const lim,
     if ( dir == coord::x ) {
         x_lcoord -= 1;
         x_ucoord += 1;
-        if ( periodic ) {
+        if ( periodic.x ) {
             if ( x_lcoord < 0 ) x_lcoord += gridDim.x;
             if ( x_ucoord >= gridDim.x ) x_ucoord -= gridDim.x;
         }
@@ -562,7 +596,7 @@ void _bnd_in( int const lim,
     if ( dir == coord::y ) {
         y_lcoord -= 1;
         y_ucoord += 1;
-        if ( periodic ) {
+        if ( periodic.y ) {
             if ( y_lcoord < 0 ) y_lcoord += gridDim.y;
             if ( y_ucoord >= gridDim.y ) y_ucoord -= gridDim.y;
         }
@@ -582,15 +616,16 @@ void _bnd_in( int const lim,
         for( int i = block.thread_rank(); i < nu; i+= block.num_threads() ) {
             int2 t = upper_ix[i];
 
-            if ( dir == coord::x ) t.x += lim;
-            if ( dir == coord::y ) t.y += lim;
+            if ( dir == coord::x ) t.x += lim.x;
+            if ( dir == coord::y ) t.y += lim.y;
 
-            ix[ n0 + i ] = t;
-            x[ n0 + i ]  = upper_x[i];
-            u[ n0 + i ]  = upper_u[i];
+            ix[ np + i ] = t;
+            x[ np + i ]  = upper_x[i];
+            u[ np + i ]  = upper_u[i];
+
         }
-        n0 += nu;
-        
+        np += nu;
+        nin += nu;
     }
 
     // Copy from lower neighbour
@@ -609,17 +644,29 @@ void _bnd_in( int const lim,
         for( int i = block.thread_rank(); i < nl; i+= block.num_threads() ) {
             int2 t = lower_ix[k+i];
             
-            if ( dir == coord::x ) t.x -= lim;
-            if ( dir == coord::y ) t.y -= lim;
+            if ( dir == coord::x ) t.x -= lim.x;
+            if ( dir == coord::y ) t.y -= lim.y;
 
-            ix[ n0 + i ] = t;
-            x[ n0 + i ]  = lower_x[k+i];
-            u[ n0 + i ]  = lower_u[k+i];
+            ix[ np + i ] = t;
+            x[ np + i ]  = lower_x[k+i];
+            u[ np + i ]  = lower_u[k+i];
         }
-        n0 += nl;
+        np += nl;
+        nin += nl;
     }
 
-    if ( block.thread_rank() == 0 ) tiles.np[ tid ] = n0;
+    if ( dir < coord::y ) {
+        // Add index of incoming particles to list of particles to check
+        for( int i = block.thread_rank(); i < nin; i+= block.num_threads() ) {
+            idx[ nidx + i ] = n0 + i;
+        }
+        nidx += nin;
+    }
+
+    if ( block.thread_rank() == 0 ) {
+        tiles.np[ tid ] = np;
+        tiles.nidx[ tid ] = nidx;
+    }
 }
 
 /**
@@ -637,28 +684,86 @@ void Particles::tile_sort( Particles &tmp ) {
     dim3 grid( ntiles.x, ntiles.y );
     dim3 block( 1024 );
 
+    int2 lim;
+    lim.x = nx.x;
+    lim.y = nx.y;
+
+
+    // Check which particles have left tiles
+    _bnd_out_check<<< grid, block >>> ( 
+        lim, tiles, data, idx
+    );
+
     _bnd_out< coord::x > <<< grid, block >>> ( 
-        nx.x, tiles, data, idx,
+        lim, tiles, data, idx,
         tmp.tiles, tmp.data
     );
 
     _bnd_in< coord::x >  <<< grid, block >>> ( 
-        nx.x, tiles, data,
+        lim, tiles, data, idx,
         tmp.tiles, tmp.data,
-        periodic.x
+        periodic
     );
 
     _bnd_out< coord::y > <<< grid, block >>> ( 
-        nx.y, tiles, data, idx,
+        lim, tiles, data, idx,
         tmp.tiles, tmp.data
      );
 
     _bnd_in< coord::y >  <<< grid, block >>> ( 
-        nx.y, tiles, data,
+        lim, tiles, data, idx,
         tmp.tiles, tmp.data,
-        periodic.y
+        periodic
     );
 
+   // validate( "After tile_sort_idx" );
+}
+
+/**
+ * @brief Moves particles to the correct tiles
+ * 
+ * The idx buffer must be pre-filled with the indices of particles that 
+ * have left the tiles
+ * 
+ * Note that particles are only expected to have moved no more than 1 tile
+ * in each direction
+ * 
+ * @param tmp   Temporary buffer to hold particles moving out of tiles. This
+ *              buffer *MUST* be big enough to hold all the particles moving
+ *              out of the tiles. It's size is not checked.
+ */
+__host__
+void Particles::tile_sort_idx( Particles &tmp ) {
+    dim3 grid( ntiles.x, ntiles.y );
+    dim3 block( 1024 );
+
+    int2 lim;
+    lim.x = nx.x;
+    lim.y = nx.y;
+
+    _bnd_out< coord::x > <<< grid, block >>> ( 
+        lim, tiles, data, idx,
+        tmp.tiles, tmp.data
+    );
+
+    _bnd_in< coord::x >  <<< grid, block >>> ( 
+        lim, tiles, data, idx,
+        tmp.tiles, tmp.data,
+        periodic
+    );
+
+    _bnd_out< coord::y > <<< grid, block >>> ( 
+        lim, tiles, data, idx,
+        tmp.tiles, tmp.data
+     );
+
+    _bnd_in< coord::y >  <<< grid, block >>> ( 
+        lim, tiles, data, idx,
+        tmp.tiles, tmp.data,
+        periodic
+    );
+
+   // validate( "After tile_sort_idx" );
 }
 
 __host__
