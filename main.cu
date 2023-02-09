@@ -696,8 +696,6 @@ void test_frozen() {
 }
 
 
-
-
 int main() {
 
     // test_emf();
@@ -723,6 +721,8 @@ int main() {
     // test_cathode();
 
     // test_frozen();
+
+    cudaDeviceReset();
 
     return 0;
 }

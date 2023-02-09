@@ -5,6 +5,15 @@
 * Thermal boundaries for particles
 * Improve particle tile sorter, make it production ready
 
+## 2023.01.9
+
+* Implements low-memory particles sorter mk1, mk2, and mk3. mk1 and mk2 copy all
+  particles to a new buffer, mk3 does it in place.
+* Fixes minor issue with `Particles::validate()` (would not work properly after calling
+  `Particles::np()`)
+* Adds `cudaDeviceReset()` before calls to `exit()`. This prevents the process from 
+  sometimes hanging when `deviceCheck()` and other routines would fail forcing a reboot.
+
 ## 2022.12.27
 
 * Improves on particle tile sorter. Particles are checked for leaving tile inside the

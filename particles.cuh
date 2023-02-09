@@ -33,11 +33,15 @@ typedef struct ParticleTiles {
     int * np;
     /// @brief Tile particle position on global array
     int * offset;
+
     /// @brief Secondary number of particles in tile
     int * np2;
 
     /// @brief Number of particles in index list
     int * nidx;
+
+    /// @brief Number of particles leaving tile in all directions
+    int * npt;
 
 } t_part_tiles;
 
@@ -159,6 +163,11 @@ class Particles {
     void tile_sort( );
     void tile_sort( Particles &tmp );
     void tile_sort_idx( Particles &tmp );
+
+    // Low memory tile sort
+    void tile_sort_mk1( Particles &tmp );
+    void tile_sort_mk2( Particles &tmp );
+    void tile_sort_mk3( Particles &tmp );
 
     __host__
     void save( zdf::part_info &info, zdf::iteration &iter, std::string path );

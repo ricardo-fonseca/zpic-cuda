@@ -90,12 +90,15 @@ void Species::initialize( float2 const box_, uint2 const ntiles, uint2 const nx,
     dx.y = box.y / (nx.y * ntiles.y);
 
     // Maximum number of particles per tile
-    unsigned int np_max = nx.x * nx.y * ppc.x * ppc.y * 8;
+    
+    unsigned int np_max = nx.x * nx.y * ppc.x * ppc.y;
+    std::cerr << "(*development*) Setting small memory buffer for species '" << name << "'\n";
+
+    // unsigned int np_max = nx.x * nx.y * ppc.x * ppc.y * 8;
     
     particles = new Particles( ntiles, nx, np_max );
     particles->periodic.x = ( bc.x.lower == species::bc::periodic );
     particles->periodic.y = ( bc.y.lower == species::bc::periodic );
-
 
     tmp = new Particles( ntiles, nx, np_max );
 
@@ -359,13 +362,15 @@ void Species::advance( EMF const &emf, Current &current ) {
     iter++;
 
     // Moving window - shift particles
-    move_window_shift();
+    //move_window_shift();
 
     // Update tiles
-    particles -> tile_sort_idx( *tmp );
+//    particles -> tile_sort_mk1( *tmp );
+//    particles -> tile_sort_mk2( *tmp );
+    particles -> tile_sort_mk3( *tmp );
 
     // Moving window - inject new particles
-    move_window_inject();
+    //move_window_inject();
 }
 
 __device__
@@ -438,8 +443,10 @@ void _move_deposit_kernel(
         _move_deposit_buffer[i].z = 0;
     }
 
+/*
     __shared__ int _nout;
     _nout = 0;
+*/
 
     block.sync();
 
@@ -593,6 +600,7 @@ void _move_deposit_kernel(
         );
         ix[i] = ix1;
 
+/*
         // Check if particle has left tile and store index if needed
         int out = (ix1.x < 0) || (ix1.x >= lim.x) || 
                   (ix1.y < 0) || (ix1.y >= lim.y);
@@ -601,6 +609,7 @@ void _move_deposit_kernel(
             int k = atomicAdd( &_nout, 1 );
             idx[k] = i;
         }
+*/
     }
 
     block.sync();
@@ -614,10 +623,11 @@ void _move_deposit_kernel(
     }
 
     if ( block.thread_rank() == 0 ) {
+/*
         // Store number of particles leaving the node
         // (indices have been stored in the idx buffer)
         tiles.nidx[ tid ] = _nout;
-
+*/
         // Update total particle pushes counter (for performance metrics)
         atomicAdd( d_nmove, np );
     }

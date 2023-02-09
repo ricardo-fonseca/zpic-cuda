@@ -38,6 +38,11 @@ class bnd {
 };
 
 
+template < typename T >
+void swap( T* &a, T* &b ) {
+    T * tmp = a; a = b; b = tmp;
+}
+
 #ifndef M_PI
 
 #define M_E          0x1.5bf0a8b145769p+1 // e
@@ -61,6 +66,7 @@ class bnd {
     if ( err_ != cudaSuccess ) { \
         std::cerr << "(*error*) " << msg_ << std::endl; \
         std::cerr << "(*error*) code: " << err_ << ", reason: " << cudaGetErrorString(err_) << std::endl; \
+        cudaDeviceReset(); \
         exit(1); \
     } \
 }
@@ -81,6 +87,7 @@ class bnd {
             std::cerr << "(*error*) Sync. error message: " << cudaGetErrorString(err_sync) << " (" << err_sync << ") \n"; \
         if ( err_async != cudaSuccess ) \
             std::cerr << "(*error*) Async. error message: " << cudaGetErrorString(err_async) << " (" << err_async << ") \n"; \
+        cudaDeviceReset(); \
         exit(1); \
     } \
 }
@@ -102,6 +109,7 @@ T * malloc_host( T * & buffer, size_t const size, std::string file, int line ) {
         std::cerr << "(*error*) Allocation failed on file " << file << ":" << line << "\n";
         std::cerr << "(*error*) Unable to allocate " << size << " elements of type " << typeid(T).name() << " on host.\n";
         std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << "\n";
+        cudaDeviceReset();
         exit(1);
     }
     return buffer;
@@ -123,6 +131,7 @@ void free_host( T * buffer, std::string file, int line ) {
             std::cerr << "(*error*) deallocation failed on file " << file << ":" << line << "\n";
             std::cerr << "(*error*) Unable to deallocate " << typeid(T).name() << " buffer at " << buffer << " from host.\n";
             std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << "\n";
+            cudaDeviceReset();
             exit(1);
         }
     }
@@ -146,6 +155,7 @@ T * malloc_dev( T * & buffer, size_t const size, std::string file, int line ) {
         std::cerr << "(*error*) Allocation failed on file " << file << ":" << line << "\n";
         std::cerr << "(*error*) Unable to allocate " << size << " elements of type " << typeid(T).name() << " on device.\n";
         std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << "\n";
+        cudaDeviceReset();
         exit(1);
     }
     return buffer;
@@ -167,6 +177,7 @@ void free_dev( T * buffer , std::string file, int line ) {
             std::cerr << "(*error*) deallocation failed on file " << file << ":" << line << "\n";
             std::cerr << "(*error*) Unable to deallocate " << typeid(T).name() << " buffer at " << buffer << " from device.\n";
             std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << "\n";
+            cudaDeviceReset();
             exit(1);
         }
     }
@@ -180,6 +191,7 @@ void devhost_memcpy( T * const __restrict__ h_out, T const * const __restrict__ 
     if ( err != cudaSuccess ) {
         std::cerr << "(*error*) Unable to copy " << size << " elements of type " << typeid(T).name() << " from device to host.\n";
         std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << "\n";
+        cudaDeviceReset();
         exit(1);
     }
 }
@@ -190,6 +202,7 @@ void hostdev_memcpy( T * const __restrict__ d_out, T const * const __restrict__ 
     if ( err != cudaSuccess ) {
         std::cerr << "(*error*) Unable to copy " << size << " elements of type " << typeid(T).name() << " from host to device.\n";
         std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << "\n";
+        cudaDeviceReset();
         exit(1);
     }
 }
@@ -325,6 +338,14 @@ void _exclusive_scan_kernel( T * __restrict__ data, unsigned int const size, T *
     if ( block.thread_rank() == 0 ) *reduction = prev;
 }
 
+template < typename T >
+__global__
+void _set_val( T * __restrict__ data, unsigned int const size, T const val ) {
+    auto grid = cg::this_grid();
+    int i = grid.thread_rank();
+    if ( i < size ) data[i] = val;
+}
+
 }
 
 /**
@@ -353,6 +374,7 @@ template< typename T> class Var {
         if ( err != cudaSuccess ) {
             std::cerr << "(*error*) Unable to allocate managed memory for device::Var" << std::endl;
             std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
+            cudaDeviceReset();
             exit(1);
         }
     }
@@ -377,6 +399,7 @@ template< typename T> class Var {
         if ( err != cudaSuccess ) {
             std::cerr << "(*error*) Unable to free managed memory for device::Var" << std::endl;
             std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
+            cudaDeviceReset();
             exit(1);
         }
     }
@@ -503,8 +526,18 @@ void zero( T * const __restrict__ data, unsigned int const size ) {
     if ( err != cudaSuccess ) {
         std::cerr << "(*error*) Unable to zero device memory." << std::endl;
         std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
+        cudaDeviceReset();
         exit(1);
     }
+}
+
+template< typename T >
+__host__
+void set_val( T * const __restrict__ data, unsigned int const size, const T val ) {
+    unsigned int block = ( size < 1024 ) ? size : 1024 ;
+    unsigned int grid  = ( size - 1 ) / block + 1;
+
+    _set_val <<< grid, block >>> ( data, size, val );
 }
 
 }
