@@ -726,54 +726,6 @@ void Particles::tile_sort( Particles &tmp ) {
 }
 
 
-
-/**
- * @brief Moves particles to the correct tiles
- * 
- * The idx buffer must be pre-filled with the indices of particles that 
- * have left the tiles
- * 
- * Note that particles are only expected to have moved no more than 1 tile
- * in each direction
- * 
- * @param tmp   Temporary buffer to hold particles moving out of tiles. This
- *              buffer *MUST* be big enough to hold all the particles moving
- *              out of the tiles. It's size is not checked.
- */
-__host__
-void Particles::tile_sort_idx( Particles &tmp ) {
-    dim3 grid( ntiles.x, ntiles.y );
-    dim3 block( 1024 );
-
-    int2 lim;
-    lim.x = nx.x;
-    lim.y = nx.y;
-
-    _bnd_out< coord::x > <<< grid, block >>> ( 
-        lim, tiles, data, idx,
-        tmp.tiles, tmp.data
-    );
-
-    _bnd_in< coord::x >  <<< grid, block >>> ( 
-        lim, tiles, data, idx,
-        tmp.tiles, tmp.data,
-        periodic
-    );
-
-    _bnd_out< coord::y > <<< grid, block >>> ( 
-        lim, tiles, data, idx,
-        tmp.tiles, tmp.data
-     );
-
-    _bnd_in< coord::y >  <<< grid, block >>> ( 
-        lim, tiles, data, idx,
-        tmp.tiles, tmp.data,
-        periodic
-    );
-
-   // validate( "After tile_sort_idx" );
-}
-
 __host__
 /**
  * @brief Moves particles to the correct tiles
@@ -1212,6 +1164,7 @@ void _copy_sort_idx( int2 const lim,
     const int start = _dir_offset[4];
 
     block.sync();
+
     for( int i = block.thread_rank(); i < n0; i+= block.num_threads() ) {
         new_ix[ start + i ] = ix[i];
     }
@@ -1673,6 +1626,260 @@ void Particles::tile_sort_mk3( Particles &tmp ) {
     //validate( "After tile_sort_mk3() ");
 }
 
+__global__
+/**
+ * @brief CUDA Kernel for checking which particles have left the tile
+ * and determine new number of particles per tile.
+ * 
+ * This kernel expects that new_tiles.np has been zeroed before being
+ * called.
+ * 
+ * Outputs: 
+ * 1. new_tiles.np : new number of particles per tile after sort
+ * 2. tiles.nidx : total number of particles exiting the tile
+ * 3. tiles.npt : number of particles going into each direction
+ * 3. d_idx : indices of particles leaving each tile
+ * 
+ * @param lim           Tile size
+ * @param tiles         Tile structure data
+ * @param data          Particle data
+ * @param tmp_tiles     (out) tmp tile structure data
+ * @param d_idx         (out) Indexes of particles leaving tile
+ */
+void _mk4_bnd_check( int2 const lim, 
+    t_part_tiles const tiles, t_part_data const data, 
+    t_part_tiles const tmp_tiles, int * __restrict__ d_idx )
+{
+    auto block = cg::this_thread_block();
+    auto warp  = cg::tiled_partition<32>(block);
+
+    const int tid = blockIdx.y * gridDim.x + blockIdx.x;
+
+    unsigned int const np     = tiles.np[ tid ];
+    unsigned int const offset = tiles.offset[ tid ];
+
+    int  * __restrict__ npt   = &tiles.npt[ 9*tid ];
+    int2 * __restrict__ ix    = &data.ix[ offset ];
+    int  * __restrict__ idx   = &d_idx[ offset ];
+
+    // Number of particles moving in each direction
+    __shared__ int _npt[9];
+    for( int i = block.thread_rank(); i < 9; i+= block.num_threads() ) 
+        _npt[i] = 0;
+    
+    __shared__ int _nout;
+    _nout = 0;
+
+    block.sync();
+
+    // Count particles according to their motion
+    // Store indices of particles leaving tile
+
+    for( int i = block.thread_rank(); i < np; i+= block.num_threads() ) {
+        int2 ipos = ix[i];
+        int xcross = ( ipos.x >= lim.x ) - ( ipos.x < 0 );
+        int ycross = ( ipos.y >= lim.y ) - ( ipos.y < 0 );
+        
+        if ( xcross || ycross ) {
+            atomicAdd( &_npt[ (ycross+1) * 3 + (xcross+1) ], 1 );
+            idx[ atomicAdd( &_nout, 1 ) ] = i;
+        }
+    }
+
+    block.sync();
+
+    if ( block.thread_rank() == 0 ) {
+        _npt[4] = np - _nout;
+
+        for( int i = 0; i < 9; i++ ) npt[ i ] = _npt[i];
+        tiles.nidx[ tid ] = _nout;
+        tmp_tiles.offset[ tid ] = offset;
+        tmp_tiles.np2[ tid ] = offset;
+    }
+}
+
+__global__
+/**
+ * @brief CUDA kernel for copying particles to temp. buffer
+ * 
+ * @param lim           Tile size
+ * @param tiles         Tile structure data
+ * @param data          Particle data
+ * @param d_idx         Indices of particles leaving the node
+ * @param tmp_tiles     Temporary tile structure data
+ * @param tmp_data      Temporary particle data
+ */
+void _mk4_copy_out( int2 const lim, 
+    t_part_tiles const tiles, t_part_data const data, int * __restrict__ d_idx,
+    t_part_tiles const tmp_tiles, t_part_data const tmp_data )
+{
+
+    auto block = cg::this_thread_block();
+    auto warp  = cg::tiled_partition<32>(block);
+
+    const int tid = blockIdx.y * gridDim.x + blockIdx.x;
+
+    int const offset          = tiles.offset[ tid ];
+    int * __restrict__ npt    = &tiles.npt[ 9*tid ];
+
+    int2   * __restrict__ ix  = &data.ix[ offset ];
+    float2 * __restrict__ x   = &data.x[ offset ];
+    float3 * __restrict__ u   = &data.u[ offset ];
+
+    int * __restrict__ idx = &d_idx[ offset ];
+    unsigned int const nidx = tiles.nidx[ tid ];
+
+    __shared__ int _dir_offset[9];
+
+    // The _dir_offset variables hold the offset for each of the 9 target
+    // tiles so the tmp_* variables just point to the beggining of the buffers
+    int2* __restrict__  tmp_ix  = tmp_data.ix;
+    float2* __restrict__ tmp_x  = tmp_data.x;
+    float3* __restrict__ tmp_u  = tmp_data.u;
+
+    // Number of particles staying in tile
+    const int n0 = npt[4];
+
+    // Find offsets on new buffer
+    for( int i = block.thread_rank(); i < 9; i+= block.num_threads() ) {
+        
+        if ( i != 4 ) {
+            // Find target node
+            int tx = blockIdx.x + i % 3 - 1;
+            int ty = blockIdx.y + i / 3 - 1;
+
+            // Correct for periodic boundaries
+            if ( tx < 0 ) tx += gridDim.x; 
+            if ( tx >= gridDim.x ) tx -= gridDim.x;
+            
+            if ( ty < 0 ) ty += gridDim.y;
+            if ( ty >= gridDim.y ) ty -= gridDim.y;
+
+            int tid2 = ty * gridDim.x + tx;
+
+            _dir_offset[i] = atomicAdd( & tmp_tiles.np2[ tid2 ], npt[ i ] );
+        } 
+    }
+
+    __shared__ int _c;
+    _c = n0;
+
+    block.sync();
+
+    // Copy particles moving away from tile and fill holes
+    for( int i = block.thread_rank(); i < nidx; i+= block.num_threads() ) {
+        
+        int k = idx[i];
+
+        int2 nix  = ix[k];
+        float2 nx = x[k];
+        float3 nu = u[k];
+        
+        int xcross = ( nix.x >= lim.x ) - ( nix.x < 0 );
+        int ycross = ( nix.y >= lim.y ) - ( nix.y < 0 );
+        
+        nix.x -= xcross * lim.x;
+        nix.y -= ycross * lim.y;
+
+        // _dir_offset[] includes the offset in the global tmp particle buffer
+        int l = atomicAdd( & _dir_offset[(ycross+1) * 3 + (xcross+1)], 1 );
+
+        tmp_ix[ l ] = nix;
+        tmp_x[ l ] = nx;
+        tmp_u[ l ] = nu;
+
+        // Fill hole if needed
+        if ( k < n0 ) {
+            int c, invalid;
+
+            do {
+                c = atomicAdd( &_c, 1 );
+                invalid = ( ix[c].x < 0 ) || ( ix[c].x >= lim.x) || 
+                          ( ix[c].y < 0 ) || ( ix[c].y >= lim.y);
+            } while (invalid);
+
+            ix[ k ] = ix[ c ];
+            x [ k ] = x [ c ];
+            u [ k ] = u [ c ];
+        }
+    }
+
+    block.sync();
+    // At this point all particles up to n0 are correct
+
+    // Store current number of local particles
+    // These are already in the correct position in global buffer
+    if ( block.thread_rank() == 0 ) {
+        tiles.np[ tid ] = n0;
+    }
+}
+
+
+__global__
+void _mk4_copy_in( 
+    t_part_tiles const tiles, t_part_data const data,
+    t_part_tiles const tmp_tiles, t_part_data const tmp_data )
+{
+
+    auto block = cg::this_thread_block();
+
+    const int tid = blockIdx.y * gridDim.x + blockIdx.x;
+
+    const int offset       =  tiles.offset[ tid ];
+    const int old_np       =  tiles.np[ tid ];
+    const int tmp_np       =  tmp_tiles.np2[ tid ] - offset;
+
+    // Notice that we are already working with the new offset
+    int2   * __restrict__ ix  = &data.ix[ offset ];
+    float2 * __restrict__ x   = &data.x [ offset ];
+    float3 * __restrict__ u   = &data.u [ offset ];
+
+    int2   * __restrict__ tmp_ix = &tmp_data.ix[ offset ];
+    float2 * __restrict__ tmp_x  = &tmp_data.x [ offset ];
+    float3 * __restrict__ tmp_u  = &tmp_data.u [ offset ];
+
+    // Add particles to the end of the buffer
+    for( int i = block.thread_rank(); i < tmp_np; i += block.num_threads() ) {
+        ix[ old_np + i ] = tmp_ix[ i ];
+        x[ old_np + i ]  = tmp_x[ i ];
+        u[ old_np + i ]  = tmp_u[ i ];
+    }
+
+    block.sync();
+
+    // Store the new offset and number of particles
+    if ( block.thread_rank() == 0 ) {
+        tiles.np[ tid ] =  old_np + tmp_np;
+    }
+}
+
+__host__
+void Particles::tile_sort_mk4( Particles &tmp ) {
+    dim3 grid( ntiles.x, ntiles.y );
+    dim3 block( 1024 );
+
+    int2 lim;
+    lim.x = nx.x;
+    lim.y = nx.y;
+
+    // Get new number of particles per tile
+    device::zero( tmp.tiles.np, ntiles.x * ntiles.y );
+    _mk4_bnd_check<<< grid, block >>> ( 
+        lim, tiles, data, tmp.tiles, idx
+    );
+
+    _mk4_copy_out <<< grid, block >>> ( 
+        lim, tiles, data, idx,
+        tmp.tiles, tmp.data
+    );
+
+    _mk4_copy_in <<< grid, block >>> ( 
+        tiles, data,
+        tmp.tiles, tmp.data
+    );
+
+    // validate( "After tile_sort_mk4() ");
+}
 
 
 __global__

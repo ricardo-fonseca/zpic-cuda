@@ -90,12 +90,15 @@ void Species::initialize( float2 const box_, uint2 const ntiles, uint2 const nx,
     dx.y = box.y / (nx.y * ntiles.y);
 
     // Maximum number of particles per tile
-    
+
+// Set false to use large memory buffer
+#if 0
     unsigned int np_max = nx.x * nx.y * ppc.x * ppc.y;
     std::cerr << "(*development*) Setting small memory buffer for species '" << name << "'\n";
+#else
+    unsigned int np_max = nx.x * nx.y * ppc.x * ppc.y * 8;
+#endif
 
-    // unsigned int np_max = nx.x * nx.y * ppc.x * ppc.y * 8;
-    
     particles = new Particles( ntiles, nx, np_max );
     particles->periodic.x = ( bc.x.lower == species::bc::periodic );
     particles->periodic.y = ( bc.y.lower == species::bc::periodic );
@@ -367,7 +370,10 @@ void Species::advance( EMF const &emf, Current &current ) {
     // Update tiles
 //    particles -> tile_sort_mk1( *tmp );
 //    particles -> tile_sort_mk2( *tmp );
-    particles -> tile_sort_mk3( *tmp );
+//    particles -> tile_sort_mk3( *tmp );
+
+    particles -> tile_sort_mk4( *tmp );
+
 
     // Moving window - inject new particles
     //move_window_inject();
@@ -427,7 +433,7 @@ inline void _dep_current_seg(
 
 __global__
 void _move_deposit_kernel(
-    t_part_tiles const tiles, t_part_data const data, int2 const lim, int * __restrict__ d_idx,
+    t_part_tiles const tiles, t_part_data const data,
     float3 * const __restrict__ d_current, unsigned int const current_offset, uint2 const ext_nx,
     float2 const dt_dx, float const q, float2 const qnx, 
     unsigned long long * const __restrict__ d_nmove ) 
@@ -443,11 +449,6 @@ void _move_deposit_kernel(
         _move_deposit_buffer[i].z = 0;
     }
 
-/*
-    __shared__ int _nout;
-    _nout = 0;
-*/
-
     block.sync();
 
     // Move particles and deposit current
@@ -461,8 +462,6 @@ void _move_deposit_kernel(
     int2   __restrict__ *ix  = &data.ix[ part_offset ];
     float2 __restrict__ *x   = &data.x[ part_offset ];
     float3 __restrict__ *u   = &data.u[ part_offset ];
-
-    int * __restrict__ idx = &d_idx[ part_offset ];
 
     for( int i = threadIdx.x; i < np; i+= blockDim.x ) {
         float3 pu = u[i];
@@ -600,16 +599,6 @@ void _move_deposit_kernel(
         );
         ix[i] = ix1;
 
-/*
-        // Check if particle has left tile and store index if needed
-        int out = (ix1.x < 0) || (ix1.x >= lim.x) || 
-                  (ix1.y < 0) || (ix1.y >= lim.y);
-        
-        if (out) {
-            int k = atomicAdd( &_nout, 1 );
-            idx[k] = i;
-        }
-*/
     }
 
     block.sync();
@@ -623,11 +612,6 @@ void _move_deposit_kernel(
     }
 
     if ( block.thread_rank() == 0 ) {
-/*
-        // Store number of particles leaving the node
-        // (indices have been stored in the idx buffer)
-        tiles.nidx[ tid ] = _nout;
-*/
         // Update total particle pushes counter (for performance metrics)
         atomicAdd( d_nmove, np );
     }
@@ -659,12 +643,8 @@ void Species::move( VectorField * J )
     uint2 ext_nx = J -> ext_nx();
     size_t shm_size = ext_nx.x * ext_nx.y * sizeof(float3);
 
-    int2 lim;
-    lim.x = particles -> nx.x;
-    lim.y = particles -> nx.y;
-
     _move_deposit_kernel <<< grid, block, shm_size >>> ( 
-        particles -> tiles, particles -> data, lim, particles -> idx, 
+        particles -> tiles, particles -> data,
         J -> d_buffer, J -> offset(), ext_nx, dt_dx, q, qnx,
         d_nmove
     );

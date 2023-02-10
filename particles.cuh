@@ -162,7 +162,9 @@ class Particles {
      */
     void tile_sort( );
     void tile_sort( Particles &tmp );
-    void tile_sort_idx( Particles &tmp );
+
+    void tile_sort_mk4( Particles &tmp );
+
 
     // Low memory tile sort
     void tile_sort_mk1( Particles &tmp );
