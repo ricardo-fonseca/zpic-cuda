@@ -16,7 +16,7 @@ class Field {
     float *d_buffer;
 
     uint2 nx;            // Tile grid size
-    uint2 gc[2];         // Tile guard cells
+    bnd<unsigned int> gc;         // Tile guard cells
     uint2 ntiles;       // Number of tiles in each direction
 
     int2 periodic;
@@ -30,7 +30,7 @@ class Field {
      * @param tnx       Tile dimensions
      * @param gc        Number of guard cells
      */
-    __host__ Field( uint2 const ntiles, uint2 const nx, uint2 const gc[2]);
+    __host__ Field( uint2 const ntiles, uint2 const nx, bnd<unsigned int> const gc);
 
     __host__ Field( uint2 const ntiles, uint2 const nx );
 
@@ -96,7 +96,8 @@ class Field {
      */
     __host__
     std::size_t tile_size() {
-        return ( gc[0].x + nx.x + gc[1].x ) * ( gc[0].y + nx.y + gc[1].y );
+        return roundup4( ( gc.x.lower + nx.x + gc.x.upper ) * 
+                         ( gc.y.lower + nx.y + gc.y.upper ) );
     };
 
     /**
@@ -130,8 +131,8 @@ class Field {
     __host__
     uint2 ext_nx() {
         return make_uint2(
-           gc[0].x +  nx.x + gc[1].x,
-           gc[0].y +  nx.y + gc[1].y
+           gc.x.lower +  nx.x + gc.x.upper,
+           gc.y.lower +  nx.y + gc.y.upper
         );
     };
 
@@ -142,8 +143,8 @@ class Field {
      */
     __host__
     size_t ext_vol() {
-        return ( gc[0].x +  nx.x + gc[1].x ) *
-               ( gc[0].y +  nx.y + gc[1].y );
+        return ( gc.x.lower +  nx.x + gc.x.upper ) *
+               ( gc.y.lower +  nx.y + gc.y.upper );
     }
 
     /**
@@ -153,7 +154,7 @@ class Field {
      */
     __host__
     unsigned int offset() {
-        return gc[0].y * (gc[0].x +  nx.x + gc[1].x) + gc[0].x;
+        return gc.y.lower * (gc.x.lower +  nx.x + gc.x.upper) + gc.x.lower;
     }
 
     /**

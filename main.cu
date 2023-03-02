@@ -1,13 +1,8 @@
 #include <stdio.h>
 
 #include "zpic.h"
-#include "timer.cuh"
-#include "emf.cuh"
-#include "species.cuh"
-#include "current.cuh"
-#include "cathode.cuh"
 
-#include "simulation.cuh"
+#include <vector>
 
 /**
  * @brief Tests EM solver and laser injection
@@ -158,7 +153,9 @@ void test_weibel() {
     // Create simulation box
     uint2 ntiles = {16, 16};
     uint2 nx = {16,16};
-    float2 box = {25.6, 25.6};
+
+    float2 box = { nx.x * ntiles.x * 0.1f,  nx.y * ntiles.y * 0.1f };
+
 
     float dt = 0.07;
 
@@ -218,6 +215,65 @@ void test_weibel() {
     sim.emf -> save( emf::e, fcomp::x );
     sim.emf -> save( emf::e, fcomp::y );
     sim.emf -> save( emf::e, fcomp::z );
+
+    sim.emf -> save( emf::b, fcomp::x );
+    sim.emf -> save( emf::b, fcomp::y );
+    sim.emf -> save( emf::b, fcomp::z );
+
+    printf("Elapsed time was: %.3f s\n", timer.elapsed( timer::s ));
+    std::cout << "Performance: " << sim.get_nmove() / timer.elapsed( timer::s ) / 1.e9 << " GPart/s\n";
+}
+
+
+void test_weibel_large() {
+
+    // Create simulation box
+    uint2 ntiles = {32, 32};
+    uint2 nx = {40,40};
+
+    float2 box = { nx.x * ntiles.x * 0.1f,  nx.y * ntiles.y * 0.1f };
+
+
+    float dt = 0.07;
+
+    Simulation sim( ntiles, nx, box, dt );
+
+    // Add particles species
+    uint2 ppc  = {8,4};
+    float3 ufl = {0., 0., 0.6};
+    float3 uth = {0.1, 0.1, 0.1};
+
+    UDistribution::Thermal udist( uth, ufl );
+
+    Species electrons( "electrons", -1.0f, ppc );
+    electrons.set_udist( udist );
+
+    Species positrons( "positrons", +1.0f, ppc );
+    udist.ufl.z = -udist.ufl.z;
+    positrons.set_udist( udist );
+
+    sim.add_species( electrons );
+    sim.add_species( positrons );
+
+    // Run simulation
+    float const imax = 500;
+
+    printf("Running Weibel test up to n = %g...\n", imax );
+
+    Timer timer;
+
+    timer.start();
+
+    while( sim.get_iter() < imax ) {
+        sim.advance();
+    }
+
+    timer.stop();
+
+    printf("Simulation complete at i = %d\n", sim.get_iter());
+
+    
+    sim.energy_info();
 
     sim.emf -> save( emf::b, fcomp::x );
     sim.emf -> save( emf::b, fcomp::y );
@@ -664,17 +720,17 @@ void test_cathode() {
 void test_frozen() {
 
     Simulation sim( 
-        make_uint2( 16, 16 ),       // ntiles
-        make_uint2( 16, 16 ),       // nx
-        make_float2( 25.6, 25.6 ),  // box
+        make_uint2( 32, 32 ),       // ntiles
+        make_uint2( 40, 40 ),       // nx
+        make_float2( 128.0, 128.0 ),  // box
         0.07                        // dt
     );
 
     // Create cathode
-    Species electrons( "electrons", -1.0f, make_uint2( 8, 8 ) );
+    Species electrons( "electrons", -1.0f, make_uint2( 8, 4 ) );
     sim.add_species( electrons );
 
-    float const tmax = 51.2 ;
+    float const tmax = 30.0 ;
 
     printf("Running frozen test up to t = %g...\n", tmax );
 
@@ -685,9 +741,10 @@ void test_frozen() {
         sim.advance(); 
     }
 
+    timer.stop();
+
     printf("Simulation complete at t = %g\n", sim.get_t());
 
-    timer.stop();
 
     printf("Elapsed time: %.3f ms\n", timer.elapsed());
 
@@ -695,6 +752,151 @@ void test_frozen() {
 
 }
 
+void test_warm() {
+
+    Simulation sim( 
+        make_uint2( 32, 32 ),       // ntiles
+        make_uint2( 32, 32 ),       // nx
+        make_float2( 102.4, 102.4 ),  // box
+        0.07                        // dt
+    );
+
+    uint2 ppc  = make_uint2( 8, 8 );
+    float3 uth = make_float3( 0.001, 0.001, 0.001 );
+    float3 ufl = make_float3( 0.0, 0.0, 0.0 );
+
+    UDistribution::Thermal udist( uth, ufl );
+
+    Species electrons( "electrons", -1.0f, ppc );
+    electrons.set_udist( udist );
+
+    sim.add_species( electrons );
+
+
+    electrons.save();
+
+
+    int const imax = 500;
+
+
+    printf("Running warm test up to iteration = %d...\n", imax );
+
+    Timer timer;
+    timer.start();
+
+    while( sim.get_iter() < imax ) {
+        sim.advance(); 
+    }
+
+    timer.stop();
+
+    sim.current->save( fcomp:: x );
+    sim.current->save( fcomp:: y );
+    sim.current->save( fcomp:: z );
+    electrons.save();
+
+    printf("Simulation complete at t = %g\n", sim.get_t());
+
+    printf("Elapsed time: %.3f ms\n", timer.elapsed());
+
+    std::cout << "Performance: " << sim.get_nmove() / timer.elapsed( timer::s ) / 1.e9 << " GPart/s\n";
+
+}
+
+void bench_weibel_sim( FILE* output, uint2 ppc, uint2 nx, uint2 ntiles ) {
+
+    Simulation sim( 
+        ntiles,       // ntiles
+        nx,       // nx
+        make_float2( ntiles.x * nx.x * 0.1f, ntiles.y * nx.y * 0.1f ),  // box
+        0.07                        // dt
+    );
+
+    float3 ufl = {0., 0., 0.6};
+    float3 uth = {0.1, 0.1, 0.1};
+
+    UDistribution::Thermal udist( uth, ufl );
+
+    Species electrons( "electrons", -1.0f, ppc );
+    electrons.set_udist( udist );
+
+    Species positrons( "positrons", +1.0f, ppc );
+    udist.ufl.z = -udist.ufl.z;
+    positrons.set_udist( udist );
+
+    sim.add_species( electrons );
+    sim.add_species( positrons );
+
+    float const imax = 500;
+
+    Timer timer;
+
+    timer.start();
+
+    while( sim.get_iter() < imax ) {
+        sim.advance();
+    }
+
+    timer.stop();
+
+    fprintf(output, " %d, %d, %d, %d, %d, %d, %.3f, %.3f\n", 
+        ppc.x, ppc.y, nx.x, nx.y, ntiles.x, ntiles.y,
+        timer.elapsed( timer::s ),
+        sim.get_nmove() / timer.elapsed( timer::s ) / 1.e9 );
+}
+
+void benchmark_weibel() {
+
+    std::vector < uint2 > ppc_list {
+        {1,1}, {2,1}, {2,2}, {4,2}, {4,4}, {8,4}, {8,8},
+        {16,8}, {16,16}, {32,16}, {32,32}
+    };
+
+    std::vector <uint2> ntiles_list {
+        {8,8}, {16,8}, {16,16}, {32,16}, {32,32}, {64,32}, 
+        {64,64}, {128,64}, {128,128}, {256,128}, {256,256},
+        {512,256}, {512,512}, {1024,512}, {1024, 1024}
+    };
+
+    std::vector <uint2> nx_list {
+        {4,4}, {8,4}, {8,8}, {16,8}, {16,16}, {32,16}, {32,32},
+        {40,32}, {40, 40} 
+    };
+
+    FILE* output = fopen( "benchmark_weibel.csv", "w");
+    fprintf( output, "ppc.x, ppc.y, nx.x, nx.y, ntiles.x, ntiles.y, time, perf\n");
+
+/*
+    uint2 ppc = {8,8};
+    uint2 nx = {16,16};
+    uint2 ntiles = {16,16};
+*/
+
+    int ntests = ppc_list.size() * 
+                 nx_list.size() *
+                 ntiles_list.size();
+
+    int i = 0;
+    for( uint2 ppc : ppc_list )
+    for( uint2 nx : nx_list )
+    for( uint2 ntiles : ntiles_list )
+    {
+        int64_t vol = nx.x * nx.y * ntiles.x * ntiles.y;
+        int64_t npart = vol * ppc.x * ppc.y;
+
+        printf("[%3d/%3d] %d, %d, %d, %d, %d, %d (%ld)\n",i++, ntests,
+             ppc.x, ppc.y, nx.x, nx.y, ntiles.x, ntiles.y, npart );
+
+        if ( npart < 104857600 ) {
+            cudaDeviceReset();
+            bench_weibel_sim( output, ppc, nx, ntiles );
+            fflush( output );
+        }
+    }
+    fclose( output );
+    printf("tests complete.\n");
+
+}
 
 int main() {
 
@@ -706,7 +908,9 @@ int main() {
 
     // test_filter();
 
-    test_weibel();
+    // test_weibel();
+
+    test_weibel_large();
 
     // test_lwfa();
 
@@ -721,6 +925,10 @@ int main() {
     // test_cathode();
 
     // test_frozen();
+
+    // test_warm();
+
+    // benchmark_weibel();
 
     cudaDeviceReset();
 

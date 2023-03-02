@@ -48,6 +48,7 @@ class VectorField {
         set(val);
         return val;
     }
+
     __host__ void add( const VectorField &rhs );
 
     __host__ 
@@ -60,8 +61,8 @@ class VectorField {
      */
     __host__
     std::size_t tile_size() {
-        return ( gc.x.lower + nx.x + gc.x.upper ) * 
-               ( gc.y.lower + nx.y + gc.y.upper );
+        return roundup4( ( gc.x.lower + nx.x + gc.x.upper ) * 
+                         ( gc.y.lower + nx.y + gc.y.upper ) );
     };
 
     /**

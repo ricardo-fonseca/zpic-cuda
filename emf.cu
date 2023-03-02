@@ -51,7 +51,6 @@ EMF::EMF( uint2 const ntiles, uint2 const nx, float2 const box,
     // Reserve device memory for energy diagnostic
     malloc_dev( d_energy, 6 );
 
-    std::cout << "(*info*) EMF object initialized" << std::endl;
 }
 
 /**
@@ -155,8 +154,11 @@ void yee_kernel(
     const float dt_dx2 = dt_dx.x / 2.0f;
     const float dt_dy2 = dt_dx.y / 2.0f;
 
-    const int tile_off = ((blockIdx.y * gridDim.x) + blockIdx.x) * ext_nx.x * ext_nx.y;
-    const int B_off = ext_nx.x * ext_nx.y;
+    const int tid      = (blockIdx.y * gridDim.x) + blockIdx.x;
+    const int tile_vol = roundup4( ext_nx.x * ext_nx.y );
+    const int tile_off = tid * tile_vol;
+
+    const int B_off = tile_vol;
 
     // Copy E and B into shared memory and sync
     for( int i = block.thread_rank(); i < ext_nx.x * ext_nx.y; i += block.num_threads() ) {
@@ -224,7 +226,9 @@ void EMF::advance() {
 
     dim3 grid( E->ntiles.x, E->ntiles.y );
     dim3 block( 64 );
-    size_t shm_size = 2 * ext_nx.x * ext_nx.y * sizeof(float3);
+
+    const int tile_vol = roundup4( ext_nx.x * ext_nx.y );
+    size_t shm_size = 2 * tile_vol * sizeof(float3);
 
     // Advance EM field using Yee algorithm modified for having E and B time centered
     yee_kernel <<< grid, block, shm_size >>> ( 
@@ -270,7 +274,9 @@ void _emf_bcx(
 {
     const int tid = blockIdx.y * ntiles.x + blockIdx.x * (ntiles.x - 1);
 
-    const int tile_off = tid * ext_nx.x * ext_nx.y;
+    const int tile_vol = roundup4( ext_nx.x * ext_nx.y );
+    const int tile_off = tid * tile_vol;
+
     const int ystride = ext_nx.x;
     const int offset   = gc.x.lower;
 
@@ -375,7 +381,8 @@ void _emf_bcy(
 {
     const int tid = blockIdx.y * (ntiles.y - 1) * ntiles.x + blockIdx.x;
 
-    const int tile_off = tid * ext_nx.x * ext_nx.y;
+    const int tile_vol = roundup4( ext_nx.x * ext_nx.y );
+    const int tile_off = tid * tile_vol;
     const int ystride = ext_nx.x;
     const int offset   = gc.y.lower * ystride;
 
@@ -514,7 +521,7 @@ void yeeJ_e(
     float3 const * const __restrict__ J, unsigned int const stride_J, 
     float const dt_dx, float const dt_dy, float const dt )
 {
-    unsigned int const vol = ( nx.x + 2 ) * ( nx.y + 2 );
+    int const vol = ( nx.x + 2 ) * ( nx.y + 2 );
 
     // The y and x loops are fused into a single loop to improve parallelism
     for( int idx = threadIdx.x; idx < vol; idx += blockDim.x ) {
@@ -559,19 +566,38 @@ void yeeJ_kernel(
     const float dt_dx2 = dt_dx.x / 2.0f;
     const float dt_dy2 = dt_dx.y / 2.0f;
 
-    const int tile_off = ((blockIdx.y * gridDim.x) + blockIdx.x) * ext_nx.x * ext_nx.y;
-    const int B_off = ext_nx.x * ext_nx.y;
+    const int tid      = blockIdx.y * gridDim.x + blockIdx.x;
+    const int tile_vol = roundup4( ext_nx.x * ext_nx.y );
+    const int tile_off = tid * tile_vol;
 
     // Copy E and B into shared memory and sync
+/*
     for( int i = block.thread_rank(); i < ext_nx.x * ext_nx.y; i += block.num_threads() ) {
         buffer[i        ] = d_E[tile_off + i];
-        buffer[B_off + i] = d_B[tile_off + i];
+        buffer[tile_vol + i] = d_B[tile_off + i];
+    }
+*/
+
+    {
+        float4 * __restrict__ dstA = (float4 *) & buffer[0];
+        float4 * __restrict__ dstB = (float4 *) & buffer[tile_vol];
+
+        float4 * __restrict__ srcA = (float4 *) & d_E[ tile_off ];
+        float4 * __restrict__ srcB = (float4 *) & d_B[ tile_off ];
+
+        // tile_vol is always a multiple of 4
+        const int size = ( tile_vol * 3 ) / 4;
+        for( int i = block.thread_rank(); i < size; i+= block.num_threads() ) {
+            dstA[ i ] = srcA[ i ];
+            dstB[ i ] = srcB[ i ];
+        }
     }
 
     float3 * const E = buffer + offset;
-    float3 * const B = E + B_off; 
+    float3 * const B = E + tile_vol; 
 
-    const int J_tile_off = ((blockIdx.y * gridDim.x) + blockIdx.x) * J_ext_nx.x * J_ext_nx.y;
+    const int J_tile_vol = roundup4( J_ext_nx.x * J_ext_nx.y );
+    const int J_tile_off = tid * J_tile_vol;
     float3 const * const J = &d_J[ J_tile_off + J_offset ];
 
     // Perform half B field advance
@@ -588,10 +614,30 @@ void yeeJ_kernel(
  
     // Copy data to global memory
     block.sync();
+
+/*
     for( int i = threadIdx.x; i < ext_nx.x * ext_nx.y; i += blockDim.x ) {
         d_E[tile_off + i] = buffer[i];
         d_B[tile_off + i] = buffer[B_off + i];
     }
+*/
+
+    {
+        float4 * __restrict__ dstA = (float4 *) & d_E[ tile_off ];
+        float4 * __restrict__ dstB = (float4 *) & d_B[ tile_off ];
+
+        float4 * __restrict__ srcA = (float4 *) & buffer[0];
+        float4 * __restrict__ srcB = (float4 *) & buffer[tile_vol];
+
+        // tile_vol is always a multiple of 4
+        const int size = ( tile_vol * 3 ) / 4;
+        for( int i = block.thread_rank(); i < size; i+= block.num_threads() ) {
+            dstA[ i ] = srcA[ i ];
+            dstB[ i ] = srcB[ i ];
+        }
+    }
+
+
 }
 
 /**
@@ -611,7 +657,8 @@ void EMF::advance( Current & current ) {
 
     dim3 grid( E->ntiles.x, E->ntiles.y );
     dim3 block( 64 );
-    size_t shm_size = 2 * ext_nx.x * ext_nx.y * sizeof(float3);
+    const int tile_vol = roundup4( ext_nx.x * ext_nx.y );
+    size_t shm_size = 2 * tile_vol * sizeof(float3);
 
     // Advance EM field using Yee algorithm modified for having E and B time centered
     yeeJ_kernel <<< grid, block, shm_size >>> ( 
@@ -742,8 +789,9 @@ void _get_energy_kernel(
     auto block = cg::this_thread_block();
     auto warp  = cg::tiled_partition<32>(block);
 
-    const int ext_vol = ext_nx.x * ext_nx.y;
-    const int tile_off = ((blockIdx.y * gridDim.x) + blockIdx.x) * ext_vol + offset;
+    const int tid      = (blockIdx.y * gridDim.x) + blockIdx.x;
+    const int tile_vol = roundup4( ext_nx.x * ext_nx.y );
+    const int tile_off = tid * tile_vol + offset;
 
     // Copy E and B into shared memory and sync
     double3 ene_E = make_double3(0,0,0);

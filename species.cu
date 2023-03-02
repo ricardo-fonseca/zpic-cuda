@@ -21,6 +21,7 @@
 #include <math.h>
 
 #include <cooperative_groups.h>
+#include <cooperative_groups/memcpy_async.h>
 namespace cg = cooperative_groups;
 
 
@@ -92,9 +93,9 @@ void Species::initialize( float2 const box_, uint2 const ntiles, uint2 const nx,
     // Maximum number of particles per tile
 
 // Set false to use large memory buffer
-#if 0
+#if 1
+    // std::cerr << "(*development*) Setting small memory buffer for species '" << name << "'\n";
     unsigned int np_max = nx.x * nx.y * ppc.x * ppc.y;
-    std::cerr << "(*development*) Setting small memory buffer for species '" << name << "'\n";
 #else
     unsigned int np_max = nx.x * nx.y * ppc.x * ppc.y * 8;
 #endif
@@ -368,11 +369,11 @@ void Species::advance( EMF const &emf, Current &current ) {
     //move_window_shift();
 
     // Update tiles
-//    particles -> tile_sort_mk1( *tmp );
 //    particles -> tile_sort_mk2( *tmp );
-//    particles -> tile_sort_mk3( *tmp );
 
-    particles -> tile_sort_mk4( *tmp );
+    particles -> tile_sort_mk3( *tmp );
+
+//    particles -> tile_sort_mk4( *tmp );
 
 
     // Moving window - inject new particles
@@ -442,11 +443,23 @@ void _move_deposit_kernel(
     extern __shared__ float3 _move_deposit_buffer[];
     auto block = cg::this_thread_block();
 
+    const int tile_size = roundup4( ext_nx.x * ext_nx.y );
+
     // Zero current buffer
+    /*
     for( int i = threadIdx.x; i < ext_nx.x * ext_nx.y; i += blockDim.x ) {
         _move_deposit_buffer[i].x = 0;
         _move_deposit_buffer[i].y = 0;
         _move_deposit_buffer[i].z = 0;
+    }
+    */
+
+    {   // use float4
+        const float4 zero = make_float4( 0, 0, 0, 0 );
+        const int size = (3 * tile_size) / 4;
+        float4 * __restrict__ dst = (float4 *) & _move_deposit_buffer[0];
+        for( int i = block.thread_rank(); i < size; i += block.num_threads() )
+            dst[i] = zero;
     }
 
     block.sync();
@@ -604,12 +617,39 @@ void _move_deposit_kernel(
     block.sync();
 
     // Add current to global buffer
-    const int tile_off = ((blockIdx.y * gridDim.x) + blockIdx.x) * ext_nx.x * ext_nx.y;
+    const int tile_off = tid * tile_size;
+
+/*
     for( int i = threadIdx.x; i < ext_nx.x * ext_nx.y; i += blockDim.x ) {
         d_current[tile_off + i].x += _move_deposit_buffer[i].x;
         d_current[tile_off + i].y += _move_deposit_buffer[i].y;
         d_current[tile_off + i].z += _move_deposit_buffer[i].z;
     }
+*/
+
+/*  
+    {   // Coallesced memory access using float
+        float * __restrict__ dst = (float *) & d_current[tile_off];
+        float * __restrict__ src = (float *) & _move_deposit_buffer[0];
+        const int size = 3 * ext_nx.x * ext_nx.y;
+        for( int i = threadIdx.x; i < size; i += blockDim.x )
+            dst[i] += src[i];
+    }
+*/
+
+    {
+        // Coallesced memory access using float4
+        float4 * __restrict__ dst = (float4 *) & d_current[tile_off];
+        float4 * __restrict__ src = (float4 *) & _move_deposit_buffer[0];
+        const int size = (3 * tile_size) / 4;
+        for( int i = threadIdx.x; i < size; i += blockDim.x ) {
+            float4 a = dst[i];
+            float4 b = src[i];
+            a.x += b.x; a.y += b.y; a.z += b.z; a.w += b.w;
+            dst[i] = a;
+        }
+    }
+
 
     if ( block.thread_rank() == 0 ) {
         // Update total particle pushes counter (for performance metrics)
@@ -640,12 +680,11 @@ void Species::move( VectorField * J )
 
     dim3 grid( particles -> ntiles.x, particles -> ntiles.y );
     dim3 block( 1024 );
-    uint2 ext_nx = J -> ext_nx();
-    size_t shm_size = ext_nx.x * ext_nx.y * sizeof(float3);
+    size_t shm_size = J -> tile_size() * sizeof(float3);
 
     _move_deposit_kernel <<< grid, block, shm_size >>> ( 
         particles -> tiles, particles -> data,
-        J -> d_buffer, J -> offset(), ext_nx, dt_dx, q, qnx,
+        J -> d_buffer, J -> offset(), J -> ext_nx(), dt_dx, q, qnx,
         d_nmove
     );
 
@@ -977,7 +1016,6 @@ void interpolate_fld(
           ( B[ih + (jh+1)*stride].z * s0xh + B[ih+1 + (jh+1)*stride].z * s1xh ) * s1yh;
 }
 
-
 /**
  * @brief CUDA kernel for pushing particles
  * 
@@ -1006,23 +1044,52 @@ void _push_kernel (
     auto warp  = cg::tiled_partition<32>(block);
 
     // Tile ID
-    const int tid = blockIdx.y * gridDim.x + blockIdx.x;
+    const int tid =  blockIdx.y * gridDim.x + blockIdx.x;
 
     // Copy E and B into shared memory
     extern __shared__ float3 buffer[];
 
-    int const field_vol = ext_nx.x * ext_nx.y;   
+    int const field_vol = roundup4( ext_nx.x * ext_nx.y );
     int const tile_off = tid * field_vol;
 
-    for( int i = threadIdx.x; i < field_vol; i += blockDim.x ) {
+/*
+    for( int i = block.thread_rank(); i < ext_nx.x * ext_nx.y; i+= block.num_threads() ) {
         buffer[i            ] = d_E[tile_off + i];
         buffer[field_vol + i] = d_B[tile_off + i];
     }
+*/
 
+    {
+        float4 * __restrict__ dstA = (float4 *) & buffer[0];
+        float4 * __restrict__ dstB = (float4 *) & buffer[field_vol];
+
+        float4 * __restrict__ srcA = (float4 *) & d_E[ tile_off ];
+        float4 * __restrict__ srcB = (float4 *) & d_B[ tile_off ];
+
+        // field_vol is always a multiple of 4
+        const int size = ( field_vol * 3 ) / 4;
+        for( int i = block.thread_rank(); i < size; i+= block.num_threads() ) {
+            dstA[ i ] = srcA[ i ];
+            dstB[ i ] = srcB[ i ];
+        }
+    }
     block.sync();
+
+
+/*
+    cg::memcpy_async( block, & buffer[0],         & d_E[tile_off], field_vol * sizeof(float3) );
+    cg::memcpy_async( block, & buffer[field_vol], & d_B[tile_off], field_vol * sizeof(float3) );
+    cg::wait( block );
+*/
 
     float3 const * const E = buffer + field_offset;
     float3 const * const B = E + field_vol; 
+
+/*
+    // Access device memory directly - not working
+    float3 const * const E = & d_E[tile_off + field_offset];
+    float3 const * const B = & d_B[tile_off + field_offset]; 
+*/
 
     // Push particles
     const int part_offset = tiles.offset[ tid ];
@@ -1033,7 +1100,7 @@ void _push_kernel (
 
     double energy = 0;
 
-    for( int i = threadIdx.x; i < np; i+= blockDim.x ) {
+    for( int i = block.thread_rank(); i < np; i+= block.num_threads() ) {
 
         // Interpolate field
         float3 e, b;
@@ -1070,11 +1137,19 @@ void Species::push( VectorField * const E, VectorField * const B )
         q * dx.y / dt
     };
 
-
     dim3 grid( particles -> ntiles.x, particles -> ntiles.y );
     dim3 block( 1024 );
     uint2 ext_nx = E -> ext_nx();
-    size_t shm_size = 2 * ( ext_nx.x * ext_nx.y * sizeof(float3) );
+    size_t shm_size = 2 * ( E -> tile_size() * sizeof(float3) );
+
+/*
+    if (shm_size > 48*1024 ) {
+        std::cerr <<  "(*error*) Too much shared memory requested at " << __func__ << "()";
+        std::cerr << " (" << __FILE__ << ":" << __LINE__ << ")\n"; \
+        cudaDeviceReset();
+        exit(1);
+    }
+*/
 
     const float alpha = 0.5 * dt / m_q;
 
@@ -1087,6 +1162,7 @@ void Species::push( VectorField * const E, VectorField * const B )
             E -> d_buffer, B -> d_buffer, E -> offset(), ext_nx, alpha,
             d_energy
         );
+
         break;
     case( species :: boris ):
         _push_kernel <species::boris> <<< grid, block, shm_size >>> (
@@ -1094,9 +1170,11 @@ void Species::push( VectorField * const E, VectorField * const B )
             E -> d_buffer, B -> d_buffer, E -> offset(), ext_nx, alpha,
             d_energy
         );
+
         break;
     }
 
+    deviceCheck();
 }
 
 __global__
@@ -1152,7 +1230,7 @@ void _dep_charge_kernel(
     block.sync();
 
     // Copy data to global memory
-    const int tile_off = tid * ext_nx.x * ext_nx.y;
+    const int tile_off = tid * roundup4( ext_nx.x * ext_nx.y );
     for( int i = threadIdx.x; i < ext_nx.x * ext_nx.y; i += blockDim.x ) {
         d_charge[tile_off + i] += _dep_charge_buffer[i];
     } 
@@ -1170,7 +1248,7 @@ void Species::deposit_charge( Field &charge ) const {
     dim3 grid( charge.ntiles.x, charge.ntiles.y );
     dim3 block( 64 );
 
-    size_t shm_size = ext_nx.x * ext_nx.y * sizeof(float);
+    size_t shm_size = roundup4( ext_nx.x * ext_nx.y ) * sizeof(float);
 
     _dep_charge_kernel <<< grid, block, shm_size >>> (
         charge.d_buffer, charge.offset(), ext_nx,
@@ -1229,10 +1307,9 @@ void Species::save() const {
 void Species::save_charge() const {
 
     // For linear interpolation we only require 1 guard cell at the upper boundary
-    const uint2 gc[2] = {
-        {0,0},
-        {1,1}
-    };
+    bnd<unsigned int> gc;
+    gc.x = {0,1};
+    gc.y = {0,1};
 
     // Deposit charge on device
     Field charge( particles -> ntiles, particles -> nx, gc );

@@ -102,7 +102,9 @@ void _plane_wave_kernel( Laser::PlaneWave laser,
     float3 * __restrict__ E, float3 * __restrict__ B,
     uint2 int_nx, uint2 ext_nx, float2 const dx )
 {
-    const int tile_off = (blockIdx.y * gridDim.x + blockIdx.x) * ( ext_nx.x * ext_nx.y );
+    const int tile_id     = blockIdx.y * gridDim.x + blockIdx.x;
+    const int tile_size   = roundup4( ext_nx.x * ext_nx.y );
+    const size_t tile_off = tile_id * tile_size ;
 
     const int ix0 = blockIdx.x * int_nx.x;
 
@@ -246,8 +248,9 @@ void _gaussian_kernel( Laser::Gaussian beam,
     float3 * const __restrict__ E, float3 * const __restrict__ B,
     uint2 int_nx, uint2 ext_nx, float2 const dx )
 {
-    int    tile_id  = blockIdx.y * gridDim.x + blockIdx.x;
-    size_t tile_off = tile_id * ext_nx.x * ext_nx.y;
+    const int tile_id  = blockIdx.y * gridDim.x + blockIdx.x;
+    const int tile_size = roundup4( ext_nx.x * ext_nx.y );
+    const size_t tile_off = tile_id * tile_size ;
 
     const int ix0 = blockIdx.x * int_nx.x;
     const int iy0 = blockIdx.y * int_nx.y;
@@ -303,9 +306,12 @@ void _div_corr_x_kernel_A(
     auto group = cg::this_thread_block();
 
     extern __shared__ float3 buffer[];
-    
-    const int tile_off = ((blockIdx.y * gridDim.x) + blockIdx.x) * ext_nx.x * ext_nx.y;
-    const int B_off = ext_nx.x * ext_nx.y;
+
+    const int tile_id  = blockIdx.y * gridDim.x + blockIdx.x;
+    const int tile_size = roundup4( ext_nx.x * ext_nx.y );
+    const size_t tile_off = tile_id * tile_size ;
+
+    const int B_off = tile_size;
 
     // Copy E and B into shared memory and sync
     for( int i = threadIdx.x; i < ext_nx.x * ext_nx.y; i += blockDim.x ) {
@@ -398,9 +404,12 @@ void _div_corr_x_kernel_C(
     auto group = cg::this_thread_block();
     
     extern __shared__ float3 buffer[];
-    
-    const int tile_off = ((blockIdx.y * gridDim.x) + blockIdx.x) * ext_nx.x * ext_nx.y;
-    const int B_off = ext_nx.x * ext_nx.y;
+
+    const int tile_id  = blockIdx.y * gridDim.x + blockIdx.x;
+    const int tile_size = roundup4( ext_nx.x * ext_nx.y );
+    const size_t tile_off = tile_id * tile_size ;
+
+    const int B_off = tile_size;
 
     // Copy E and B into shared memory and sync
     for( int i = threadIdx.x; i < ext_nx.x * ext_nx.y; i += blockDim.x ) {
@@ -458,19 +467,14 @@ void div_corr_x(VectorField& E, VectorField& B, float2 const dx )
     //    tile (starting at 0 on right edge)
     double2* tmp;
     size_t bsize = E.ntiles.x * (E.ntiles.y * E.nx.y) * sizeof( double2 );
-    auto err = cudaMalloc( &tmp, bsize );
-    if ( err != cudaSuccess ) {
-        std::cerr << "(*error*) Unable to allocate device memory for div_corr_x." << std::endl;
-        std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
-        return;
-    }
+    malloc_dev( tmp, bsize );
 
     uint2 const ext_nx = E.ext_nx();
     unsigned int const offset = E.offset();
 
     dim3 grid( E.ntiles.x, E.ntiles.y );
     dim3 block( 32 );
-    size_t shm_size = E.ext_vol() * 2 * sizeof(float3);
+    size_t shm_size = 2 * E.tile_size() * sizeof(float3);
     
     // Shared memory size must be below 48 k
     if ( shm_size >= 49152 ) {
@@ -507,12 +511,7 @@ void div_corr_x(VectorField& E, VectorField& B, float2 const dx )
         dx, tmp
     );
 
-    err = cudaFree( tmp );
-    if ( err != cudaSuccess ) {
-        std::cerr << "(*error*) Unable to deallocate device memory in div_corr_x." << std::endl;
-        std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
-        return;
-    }
+    free_dev( tmp );
 
     // Correct longitudinal values on guard cells
     E.copy_to_gc();

@@ -37,11 +37,46 @@ class bnd {
     bnd( T val ) : x({val,val}), y({val,val}) {};
 };
 
-
+/**
+ * @brief Swaps 2 pointer values
+ * 
+ * @tparam T    Value type
+ * @param a     Value a
+ * @param b     Value b
+ */
 template < typename T >
 void swap( T* &a, T* &b ) {
     T * tmp = a; a = b; b = tmp;
 }
+
+/**
+ * @brief Rounds up to a multiple of 4
+ * 
+ * @tparam T    Value type (must be integer like)
+ * @param a     Value to round up
+ * @return T    a rounded up to the nearest multiple of 4
+ */
+template < typename T >
+__host__ __device__
+T roundup4( T a ) { return (a + 3) & static_cast<T>(-4);}
+
+/**
+ * @brief Rounds up to a multiple of N (where N is a power of 2)
+ * 
+ * @tparam N    Value will be rounded to a multiple of N. Must be a power of 2.
+ * @tparam T    Value type. Must be an integer type (int, long, unsigned, int64_t, etc.)
+ * @param a     Value to round up
+ * @return T    Value rounded up to a multiple of N
+ */
+template < int N, typename T >
+__host__ __device__
+T roundup( T a ) {
+    static_assert( N > 0, "N must be > 0");
+    static_assert( !(N & (N-1)), "N must b a power of 2" );
+    return ( a + (N-1) ) & static_cast<T>(-N);
+};
+
+/* ANSI C does not define math constants */
 
 #ifndef M_PI
 

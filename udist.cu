@@ -119,7 +119,7 @@ void UDistribution::Thermal::set( Particles & part, unsigned int seed ) const {
     // Set thermal momentum
     dim3 grid( part.ntiles.x, part.ntiles.y );
     dim3 block( 64 );
-    
+
     uint2 rnd_seed = {12345 + seed, 67890 };
     _set_thermal <<< grid, block >>> ( 
         part.tiles, part.data.u, rnd_seed, uth, ufl

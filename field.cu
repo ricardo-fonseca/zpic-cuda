@@ -6,7 +6,47 @@
 #include "util.cuh"
 
 
-namespace {
+/**
+ * @brief Construct a new VFLD::VFLD object
+ * 
+ * Data is allocated on the GPU. No data initialization is performed.
+ * 
+ * @param ntiles    Number of tiles
+ * @param nx        Tile grid size
+ * @param gc        Number of guard cells
+ */
+__host__ Field::Field( uint2 const ntiles, uint2 const nx,  bnd<unsigned int> const gc) :
+    ntiles( ntiles ), nx( nx ), periodic( make_int2(1,1) ), gc(gc)
+{
+    malloc_dev( d_buffer, buffer_size() );
+};
+
+/**
+ * @brief Construct a new VFLD::VFLD object without guard cells
+ * 
+ * Data is allocated both on the host and the GPU. No data initialization is performed.
+ * 
+ * @param ntiles    Number of tiles
+ * @param nx        Tile grid size
+ */
+__host__ Field::Field( uint2 const ntiles, uint2 const nx ) :
+    ntiles( ntiles ), nx( nx ), periodic( make_int2(1,1) )
+{
+    gc = {0};
+
+    malloc_dev( d_buffer, buffer_size() );
+};
+
+/**
+ * @brief Field destructor
+ * 
+ * Deallocates dynamic GPU memory
+ */
+__host__ Field::~Field() {
+
+    free_dev( d_buffer );
+};
+
 
 /**
  * @brief CUDA kernel for Field_set
@@ -20,6 +60,21 @@ void _set_kernel( float *  d_buffer, const float val, size_t size ) {
     const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if ( idx < size ) d_buffer[idx] = val;
 }
+
+/**
+ * @brief Sets host and device data to a constant value
+ * 
+ * @param val       Type float value
+ */
+__host__ void Field::set( const float val ) {
+
+    const size_t size = buffer_size( );
+    int const block = 32;
+    int const grid = (size -1) / block + 1;
+
+    _set_kernel <<< grid, block >>> ( d_buffer, val, size );
+};
+
 
 /**
  * @brief CUDA kernel for Field::add
@@ -37,6 +92,23 @@ void _add_kernel( float * __restrict__ a, float * __restrict__ b, size_t size ) 
 }
 
 /**
+ * @brief Adds another Field object on top of local object
+ * 
+ * Addition is done on device, data is not copied to CPU
+ * 
+ * @param rhs         Other object to add
+ * @return Field&    Reference to local object
+ */
+__host__ void Field::add( const Field &rhs ) {
+    size_t const size = buffer_size( );
+    int const block = 32;
+    int const grid = (size -1) / block + 1;
+
+    _add_kernel <<< grid, block >>> ( d_buffer, rhs.d_buffer, size );
+};
+
+
+/**
  * @brief CUDA kernel for Field::gather
  * 
  * @param out       Outuput type float array
@@ -51,8 +123,9 @@ void _field_gather_kernel(
     float const * const __restrict__ in,
     uint2 const gnx, uint2 const int_nx, uint2 const ext_nx ) {
 
-    int    tile_id  = blockIdx.y * gridDim.x + blockIdx.x;
-    size_t tile_off = tile_id * ext_nx.x * ext_nx.y;
+    const int    tile_id  = blockIdx.y * gridDim.x + blockIdx.x;
+    const int    tile_vol = roundup4( ext_nx.x * ext_nx.y );
+    const size_t tile_off = tile_id * tile_vol ;
 
 
     for( int i = threadIdx.x; i < int_nx.x * int_nx.y; i+= blockDim.x ) {
@@ -70,6 +143,45 @@ void _field_gather_kernel(
     }
 
 }
+
+
+/**
+ * @brief Gather field component values from all tiles into a contiguous grid
+ * 
+ * Used mostly for diagnostic output
+ * 
+ * @param Field      Pointer to Field variable
+ * @param data      Output buffer, must be pre-allocated
+ */
+__host__ int Field::gather_host( float *  __restrict__ h_data ) {
+
+    // Output data x, y dimensions
+    uint2 gsize = make_uint2( 
+        ntiles.x * nx.x,
+        ntiles.y * nx.y
+    );
+
+    float *  d_data;
+    size_t const size = gsize.x * gsize.y;
+    malloc_dev( d_data, size );
+    
+    // Gather data on device
+    dim3 block( 64 );
+    dim3 grid( ntiles.x, ntiles.y );
+
+    _field_gather_kernel <<< grid, block >>> ( 
+        d_data, d_buffer + offset(), gsize,
+        nx, ext_nx() );
+
+    // Copy data to local buffer
+    auto err = cudaMemcpy( h_data, d_data, size * sizeof( float ), cudaMemcpyDeviceToHost );
+    CHECK_ERR( err, "Unable to copy data back to cpu");
+
+    free_dev( d_data );
+
+    return 0;
+};
+
 
 /**
  * @brief CUDA kernel for adding guard cell values along x direction
@@ -92,7 +204,7 @@ void _add_gcx_kernel(
 
     const int y_coord = blockIdx.y;
     const int x_coord = blockIdx.x;
-    const int tile_vol = ext_nx.x * ext_nx.y;
+    const int tile_vol = roundup4( ext_nx.x * ext_nx.y );
     float * __restrict__ local   = buffer + (y_coord * gridDim.x + x_coord ) * tile_vol;
 
     // Find neighbours
@@ -151,7 +263,7 @@ void _add_gcy_kernel(
     // Find neighbours
     const int y_coord = blockIdx.y;
     const int x_coord = blockIdx.x;
-    const int tile_vol = ext_nx.x * ext_nx.y;
+    const int tile_vol = roundup4( ext_nx.x * ext_nx.y );
     float * __restrict__ local   = buffer + (y_coord  * gridDim.x + x_coord ) * tile_vol;
 
     // Find neighbours
@@ -188,6 +300,26 @@ void _add_gcy_kernel(
     }
 }
 
+/**
+ * @brief Adds values from neighboring guard cells to local data
+ * 
+ */
+__host__
+void Field::add_from_gc() {
+
+    dim3 grid( ntiles.x, ntiles.y );
+    dim3 block( 64 );
+
+    _add_gcx_kernel <<< grid, block >>> (
+        d_buffer, periodic.x, ext_nx(), nx, gc.x.lower, gc.x.upper
+    );
+
+    _add_gcy_kernel <<< grid, block >>> (
+        d_buffer, periodic.y, ext_nx(), nx, gc.y.lower, gc.y.upper
+    );
+
+};
+
 
 /**
  * @brief CUDA kernel for updating guard cell values along x direction
@@ -208,7 +340,7 @@ void _copy_gcx_kernel(
 
     const int y_coord = blockIdx.y;
     const int x_coord = blockIdx.x;
-    const int tile_vol = ext_nx.x * ext_nx.y;
+    const int tile_vol = roundup4( ext_nx.x * ext_nx.y );
     float * __restrict__ local   = buffer + (y_coord * gridDim.x + x_coord ) * tile_vol;
 
     // Find neighbours
@@ -264,7 +396,7 @@ void _copy_gcy_kernel(
 
     const int y_coord = blockIdx.y;
     const int x_coord = blockIdx.x;
-    const int tile_vol = ext_nx.x * ext_nx.y;
+    const int tile_vol = roundup4( ext_nx.x * ext_nx.y );
     float * __restrict__ local   = buffer + (y_coord  * gridDim.x + x_coord ) * tile_vol;
 
     // Find neighbours
@@ -301,145 +433,6 @@ void _copy_gcy_kernel(
     }
 }
 
-} // End of anonymous namespace
-
-/**
- * @brief Construct a new VFLD::VFLD object
- * 
- * Data is allocated on the GPU. No data initialization is performed.
- * 
- * @param ntiles    Number of tiles
- * @param nx        Tile grid size
- * @param gc        Number of guard cells
- */
-__host__ Field::Field( uint2 const ntiles, uint2 const nx, uint2 const gc_[2]) :
-    ntiles( ntiles ), nx( nx ), periodic( make_int2(1,1) )
-{
-    gc[0] = gc_[0];
-    gc[1] = gc_[1];
-
-    malloc_dev( d_buffer, buffer_size() );
-};
-
-/**
- * @brief Construct a new VFLD::VFLD object without guard cells
- * 
- * Data is allocated both on the host and the GPU. No data initialization is performed.
- * 
- * @param ntiles    Number of tiles
- * @param nx        Tile grid size
- */
-__host__ Field::Field( uint2 const ntiles, uint2 const nx ) :
-    ntiles( ntiles ), nx( nx )
-{
-    gc[0] = {0};
-    gc[1] = {0};
-
-    malloc_dev( d_buffer, buffer_size() );
-};
-
-/**
- * @brief Field destructor
- * 
- * Deallocates dynamic GPU memory
- */
-__host__ Field::~Field() {
-
-    free_dev( d_buffer );
-};
-
-/**
- * @brief Sets host and device data to a constant value
- * 
- * @param val       Type float value
- */
-__host__ void Field::set( const float val ) {
-
-    const size_t size = buffer_size( );
-    int const block = 32;
-    int const grid = (size -1) / block + 1;
-
-    _set_kernel <<< grid, block >>> ( d_buffer, val, size );
-};
-
-
-/**
- * @brief Gather field component values from all tiles into a contiguous grid
- * 
- * Used mostly for diagnostic output
- * 
- * @param Field      Pointer to Field variable
- * @param data      Output buffer, must be pre-allocated
- */
-__host__ int Field::gather_host( float *  __restrict__ h_data ) {
-
-    // Output data x, y dimensions
-    uint2 gsize = make_uint2( 
-        ntiles.x * nx.x,
-        ntiles.y * nx.y
-    );
-
-    float *  d_data;
-    size_t size = gsize.x * gsize.y;
-
-    auto err = cudaMalloc( &d_data, size * sizeof( float ));
-    if ( err != cudaSuccess ) {
-        std::cerr << "(*error*) Unable to allocate device memory for Field gather()." << std::endl;
-        std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
-        return -1;
-    }
-
-    // Tile block size (grid + guard cells)
-    uint2 ext_nx = make_uint2(
-        gc[0].x +  nx.x + gc[1].x,
-        gc[0].y +  nx.y + gc[1].y
-    );
-
-    int offset = gc[0].y * ext_nx.x + gc[0].x;
-    
-    // Gather data on device
-    dim3 block( 64 );
-    dim3 grid( ntiles.x, ntiles.y );
-
-    _field_gather_kernel <<< grid, block >>> ( 
-        d_data, d_buffer + offset, gsize,
-        nx, ext_nx );
-
-    // Copy data to local buffer
-    err = cudaMemcpy( h_data, d_data, size * sizeof( float ), cudaMemcpyDeviceToHost );
-    if ( err != cudaSuccess ) {
-        std::cerr << "(*error*) Unable to copy data back to cpu in Field_gather()." << std::endl;
-        std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
-        return -1;
-    }
-
-    // Free temporary device memory
-    err = cudaFree( d_data );
-    if ( err != cudaSuccess ) {
-        std::cerr << "(*error*) Unable to free device memory in Field_gather()." << std::endl;
-        std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
-        return -1;
-    }
-
-    return 0;
-};
-
-/**
- * @brief Adds another Field object on top of local object
- * 
- * Addition is done on device, data is not copied to CPU
- * 
- * @param rhs         Other object to add
- * @return Field&    Reference to local object
- */
-__host__ void Field::add( const Field &rhs ) {
-    size_t const size = buffer_size( );
-    int const block = 32;
-    int const grid = (size -1) / block + 1;
-
-    _add_kernel <<< grid, block >>> ( d_buffer, rhs.d_buffer, size );
-};
-
 
 /**
  * @brief Copies edge valies to neighboring guard cells
@@ -448,40 +441,16 @@ __host__ void Field::add( const Field &rhs ) {
 __host__
 void Field::copy_to_gc() {
 
-    uint2 ext = ext_nx();
-
     dim3 grid( ntiles.x, ntiles.y );
     dim3 block( 64 );
 
     _copy_gcx_kernel <<< grid, block >>> (
-        d_buffer, periodic.x, ext, nx, gc[0].x, gc[1].x
+        d_buffer, periodic.x, ext_nx(), nx, gc.x.lower, gc.x.upper
     );
 
     _copy_gcy_kernel <<< grid, block >>> (
-        d_buffer, periodic.y, ext, nx, gc[0].y, gc[1].y
+        d_buffer, periodic.y, ext_nx(), nx, gc.y.lower, gc.y.upper
     );
-};
-
-/**
- * @brief Adds values from neighboring guard cells to local data
- * 
- */
-__host__
-void Field::add_from_gc() {
-
-    uint2 ext = ext_nx();
-
-    dim3 grid( ntiles.x, ntiles.y );
-    dim3 block( 64 );
-
-    _add_gcx_kernel <<< grid, block >>> (
-        d_buffer, periodic.x, ext, nx, gc[0].x, gc[1].x
-    );
-
-    _add_gcy_kernel <<< grid, block >>> (
-        d_buffer, periodic.y, ext, nx, gc[0].y, gc[1].y
-    );
-
 };
 
 /**

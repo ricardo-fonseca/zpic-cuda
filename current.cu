@@ -48,7 +48,6 @@ Current::Current( uint2 const ntiles, uint2 const nx, float2 const box,
     // Reset iteration number
     iter = 0;
 
-    std::cout << "(*info*) Current object initialized." << std::endl;
 }
 
 __global__
@@ -58,8 +57,8 @@ void _current_bcx(
     uint2 const ntiles, current::bc_type bc )
 {
     const int tid = blockIdx.y * ntiles.x + blockIdx.x * (ntiles.x - 1);
-
-    const int tile_off = tid * ext_nx.x * ext_nx.y;
+    const int tile_vol = roundup4( ext_nx.x * ext_nx.y );
+    const int tile_off = tid * tile_vol;
     const int ystride = ext_nx.x;
     const int offset   = gc.x.lower;
 
@@ -111,8 +110,8 @@ void _current_bcy(
     uint2 const ntiles, current::bc_type bc )
 {
     const int tid = blockIdx.y * (ntiles.y - 1) * ntiles.x + blockIdx.x;
-
-    const int tile_off = tid * ext_nx.x * ext_nx.y;
+    const int tile_vol = roundup4( ext_nx.x * ext_nx.y );
+    const int tile_off = tid * tile_vol;
     const int ystride = ext_nx.x;
     const int offset   = gc.y.lower * ystride;
 

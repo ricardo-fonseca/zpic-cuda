@@ -161,15 +161,15 @@ class Particles {
      * 
      */
     void tile_sort( );
-    void tile_sort( Particles &tmp );
 
+    // in-place large memory tile sort
     void tile_sort_mk4( Particles &tmp );
 
-
-    // Low memory tile sort
-    void tile_sort_mk1( Particles &tmp );
-    void tile_sort_mk2( Particles &tmp );
+    // in-place low memory tile sort
     void tile_sort_mk3( Particles &tmp );
+
+    // out of place tile sort (used when growing buffer)
+    void tile_sort_mk2( Particles &tmp );
 
     __host__
     void save( zdf::part_info &info, zdf::iteration &iter, std::string path );

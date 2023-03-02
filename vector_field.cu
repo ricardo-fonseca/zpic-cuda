@@ -88,8 +88,9 @@ void _gather_kernelx(
     float * const __restrict__ out, float3 const * const __restrict__ in,
     uint2 const gnx, uint2 const int_nx, uint2 const ext_nx ) {
 
-    int    tile_id  = blockIdx.y * gridDim.x + blockIdx.x;
-    size_t tile_off = tile_id * ext_nx.x * ext_nx.y;
+    const int tile_id  = blockIdx.y * gridDim.x + blockIdx.x;
+    const int tile_size = roundup4( ext_nx.x * ext_nx.y );
+    const size_t tile_off = tile_id * tile_size ;
 
     for( int i = threadIdx.x; i < int_nx.x * int_nx.y; i+= blockDim.x ) {
         int const ix = i % int_nx.x;
@@ -120,8 +121,9 @@ void _gather_kernely(
         float * const __restrict__ out, float3 const * const __restrict__ in,
     uint2 const gnx, uint2 const int_nx, uint2 const ext_nx )
 {
-    int    tile_id  = blockIdx.y * gridDim.x + blockIdx.x;
-    size_t tile_off = tile_id * ext_nx.x * ext_nx.y;
+    const int tile_id  = blockIdx.y * gridDim.x + blockIdx.x;
+    const int tile_size = roundup4( ext_nx.x * ext_nx.y );
+    const size_t tile_off = tile_id * tile_size ;
 
     for( int i = threadIdx.x; i < int_nx.x * int_nx.y; i+= blockDim.x ) {
         int const ix = i % int_nx.x;
@@ -153,8 +155,9 @@ void _gather_kernelz(
     uint2 const gnx, uint2 const int_nx, uint2 const ext_nx )
 {
 
-    int    tile_id  = blockIdx.y * gridDim.x + blockIdx.x;
-    size_t tile_off = tile_id * ext_nx.x * ext_nx.y;
+    const int tile_id  = blockIdx.y * gridDim.x + blockIdx.x;
+    const int tile_size = roundup4( ext_nx.x * ext_nx.y );
+    const size_t tile_off = tile_id * tile_size ;
 
     for( int i = threadIdx.x; i < int_nx.x * int_nx.y; i+= blockDim.x ) {
         int const ix = i % int_nx.x;
@@ -217,11 +220,7 @@ int VectorField :: gather_host( const int fc, float * const __restrict__ h_data 
 
     // Copy data to local buffer
     auto err = cudaMemcpy( h_data, d_data, size * sizeof(float), cudaMemcpyDeviceToHost );
-    if ( err != cudaSuccess ) {
-        std::cerr << "(*error*) Unable to copy data back to cpu in VectorField_gather()." << std::endl;
-        std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << std::endl;
-        return -1;
-    }
+    CHECK_ERR( err, "Unable to copy data back to cpu");
 
     free_dev( d_data );
 
@@ -291,7 +290,7 @@ void _copy_gcx_kernel(
 {
     const int y_coord = blockIdx.y;
     const int x_coord = blockIdx.x;
-    const int tile_vol = ext_nx.x * ext_nx.y;
+    const int tile_vol = roundup4( ext_nx.x * ext_nx.y );
     float3 * __restrict__ local   = buffer + (y_coord * gridDim.x + x_coord ) * tile_vol;
 
     // Find neighbours
@@ -347,7 +346,7 @@ void _copy_gcy_kernel(
 {
     const int y_coord = blockIdx.y;
     const int x_coord = blockIdx.x;
-    const int tile_vol = ext_nx.x * ext_nx.y;
+    const int tile_vol = roundup4( ext_nx.x * ext_nx.y );
     float3 * __restrict__ local   = buffer + (y_coord  * gridDim.x + x_coord ) * tile_vol;
 
     // Find neighbours
@@ -427,7 +426,7 @@ void _add_gcx_kernel(
 {
     const int y_coord = blockIdx.y;
     const int x_coord = blockIdx.x;
-    const int tile_vol = ext_nx.x * ext_nx.y;
+    const int tile_vol = roundup4( ext_nx.x * ext_nx.y );
     float3 * __restrict__ local   = buffer + (y_coord * gridDim.x + x_coord ) * tile_vol;
 
     // Find neighbours
@@ -491,7 +490,7 @@ void _add_gcy_kernel(
 {
     const int y_coord = blockIdx.y;
     const int x_coord = blockIdx.x;
-    const int tile_vol = ext_nx.x * ext_nx.y;
+    const int tile_vol = roundup4( ext_nx.x * ext_nx.y );
     float3 * __restrict__ local   = buffer + (y_coord  * gridDim.x + x_coord ) * tile_vol;
 
     // Find neighbours
@@ -568,11 +567,13 @@ void _x_shift_left_kernel( unsigned int const shift, float3 * const __restrict__
 
     auto block = cg::this_thread_block();
 
-    unsigned int offset = ( blockIdx.y * gridDim.x + blockIdx.x ) * (ext_nx.x * ext_nx.y);
+    const int tid      = ( blockIdx.y * gridDim.x + blockIdx.x );
+    const int tile_vol = roundup4( ext_nx.x * ext_nx.y );
+    unsigned int offset = tid * tile_vol;
 
     // j = [0 .. ext_nx.y[
     // i = [0 .. ext_nx.x[
-    for( int idx = threadIdx.x; idx < ext_nx.y * ext_nx.x; idx += blockDim.x ) {
+    for( int idx = block.thread_rank(); idx < ext_nx.y * ext_nx.x; idx += block.num_threads() ) {
         const int i = idx % ext_nx.x;
         const int j = idx / ext_nx.x;
         if ( i < ext_nx.x - shift ) {
@@ -584,7 +585,7 @@ void _x_shift_left_kernel( unsigned int const shift, float3 * const __restrict__
 
     block.sync();
 
-    for( int idx = threadIdx.x; idx < ext_nx.y * ext_nx.x; idx += blockDim.x ) {
+    for( int idx = block.thread_rank(); idx < ext_nx.y * ext_nx.x; idx += block.num_threads() ) {
         buffer[ offset + idx ] = local[ idx ];
     }
 
@@ -615,6 +616,7 @@ void VectorField::x_shift_left( unsigned int const shift ) {
         _copy_gcx_kernel <<<grid, block>>> ( d_buffer, 0, ext, nx, gc.x.lower, gc.x.upper );
     } else {
         std::cerr << "(*error*) VectorField::x_shift_left(), shift value too large, must be <= gc.x.upper\n";
+        cudaDeviceReset();
         exit(1);
     }
 }
@@ -639,7 +641,9 @@ void _kernel3_x( float const a, float const b, float const c,
     auto block = cg::this_thread_block();
     extern __shared__ float3 local[];
 
-    const int tile_off = ((blockIdx.y * gridDim.x) + blockIdx.x) * ext_nx.x * ext_nx.y;
+    const int tid      = ( blockIdx.y * gridDim.x + blockIdx.x );
+    const int tile_vol = roundup4( ext_nx.x * ext_nx.y );
+    const int tile_off = tid * tile_vol;
 
     // Copy data into shared memory
     for( int i = block.thread_rank(); i < ext_nx.x * ext_nx.y; i += block.num_threads() ) 
@@ -689,6 +693,7 @@ void VectorField::kernel3_x( float const a, float const b, float const c ) {
 
     } else {
         std::cerr << "(*error*) VectorField::kernel_x3() requires at least 1 guard cell at both the lower and upper x boundaries.\n";
+        cudaDeviceReset();
         exit(1);
     }
 }
@@ -713,7 +718,9 @@ void _kernel3_y( float const a, float const b, float const c,
     auto block = cg::this_thread_block();
     extern __shared__ float3 local[];
 
-    const int tile_off = ((blockIdx.y * gridDim.x) + blockIdx.x) * ext_nx.x * ext_nx.y;
+    const int tid      = ( blockIdx.y * gridDim.x + blockIdx.x );
+    const int tile_vol = roundup4( ext_nx.x * ext_nx.y );
+    const int tile_off = tid * tile_vol;
 
     // Copy data into shared memory
     for( int i = block.thread_rank(); i < ext_nx.x * ext_nx.y; i += block.num_threads() ) 
