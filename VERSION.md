@@ -5,6 +5,11 @@
 * Thermal boundaries for particles
 * Improve particle tile sorter, make it production ready
 
+## 2023.04.01
+
+* Adds test selection through (basic) command line option
+* Adds `benchmark` script to repeat a test several times and get average performance
+
 ## 2023.01.10
 
 * Implements large particle sorter mk4
@@ -16,7 +21,7 @@
 * Fixes minor issue with `Particles::validate()` (would not work properly after calling
   `Particles::np()`)
 * Adds `cudaDeviceReset()` before calls to `exit()`. This prevents the process from 
-  sometimes hanging when `deviceCheck()` and other routines would fail forcing a reboot.
+  sometimes hanging when `deviceCheck()` and other routines would fail, forcing a reboot.
 
 ## 2022.12.27
 

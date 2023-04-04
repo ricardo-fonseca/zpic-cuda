@@ -1,3 +1,4 @@
+
 #include "density.cuh"
 
 #include <cooperative_groups.h>
@@ -6,6 +7,8 @@ namespace cg = cooperative_groups;
 __global__ 
 /**
  * @brief CUDA kernel for injecting a uniform plasma density
+ * 
+ * Particles in the same cell are injected contiguously
  * 
  * @param range     Cell range (global) to inject particles in
  * @param ppc       Number of particles per cell
@@ -96,15 +99,127 @@ void _inject_uniform_kernel( bnd<unsigned int> range,
     }
 }
 
+__global__
+/**
+ * @brief CUDA kernel for injecting a uniform plasma density mk2
+ * 
+ * Places contiguous particles in different cells. This minimizes memory collisions
+ * when depositing current, especially for very low temperatures.
+ * 
+ * @param range     Cell range (global) to inject particles in
+ * @param ppc       Number of particles per cell
+ * @param nx        Number of cells in tile
+ * @param d_tiles   Particle tile information
+ * @param d_ix      Particle data (cell)
+ * @param d_x       Particle data (position)
+ * @param d_u       Particle data (generalized velocity)
+ */
+void _inject_uniform_kernel_mk2( bnd<unsigned int> range,
+    uint2 const ppc, uint2 const nx, 
+    t_part_tiles const tiles,
+    t_part_data const data )
+{
+
+    auto block = cg::this_thread_block();
+
+    // Tile ID
+    int const tid = blockIdx.y * gridDim.x + blockIdx.x;
+
+    // Store number of particles before injection
+    const int np = tiles.np[ tid ];
+    if ( block.thread_rank() == 0 ) {
+        tiles.np2[ tid ] = np;
+    }
+    block.sync();
+
+    // Find injection range in tile coordinates
+    int ri0 = range.x.lower - blockIdx.x * nx.x;
+    int ri1 = range.x.upper - blockIdx.x * nx.x;
+
+    int rj0 = range.y.lower - blockIdx.y * nx.y;
+    int rj1 = range.y.upper - blockIdx.y * nx.y;
+
+    // Comparing signed and unsigned integers does not work here
+    int const nxx = nx.x;
+    int const nxy = nx.y;
+    
+    // If range overlaps with tile
+    if (( ri0 < nxx ) && ( ri1 >= 0 ) &&
+        ( rj0 < nxy ) && ( rj1 >= 0 )) {
+
+        // Limit to range inside this tile
+        if (ri0 < 0) ri0 = 0;
+        if (rj0 < 0) rj0 = 0;
+        if (ri1 >= nxx ) ri1 = nxx-1;
+        if (rj1 >= nxy ) rj1 = nxy-1;
+
+        int const row = (ri1-ri0+1);
+        int const vol = (rj1-rj0+1) * row;
+
+        const int offset =  tiles.offset[ tid ];
+        int2   * __restrict__ const ix = &data.ix[ offset ];
+        float2 * __restrict__ const x  = &data.x[ offset ];
+        float3 * __restrict__ const u  = &data.u[ offset ];
+
+        const int np_cell = ppc.x * ppc.y;
+
+        double dpcx = 1.0 / ppc.x;
+        double dpcy = 1.0 / ppc.y;
+
+        for( int i1 = 0; i1 < ppc.y; i1++ ) {
+            for( int i0 = 0; i0 < ppc.x; i0++) {
+                float2 const pos = make_float2(
+                    dpcx * ( i0 + 0.5 ) - 0.5,
+                    dpcy * ( i1 + 0.5 ) - 0.5
+                );
+
+                int ppc_idx = i1 * ppc.x + i0;
+
+                // Each thread takes 1 cell
+                for( int idx = threadIdx.x; idx < vol; idx += blockDim.x ) {
+                    int2 const cell = make_int2( 
+                        idx % row + ri0,
+                        idx / row + rj0
+                    );
+
+                    int part_idx = np + vol * ppc_idx + idx;
+
+                    ix[ part_idx ] = cell;
+                    x[ part_idx ] = pos;
+                    u[ part_idx ] = {0};
+                    part_idx++;
+
+                }
+                ppc_idx ++;
+            }
+        }
+
+        // Update global number of particles in tile
+        if ( block.thread_rank() == 0 )
+            tiles.np[ tid ] = np + vol * np_cell ;
+    }
+}
+
 void Density::Uniform::inject( Particles * part, 
     uint2 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range ) const
 {
     dim3 grid( part -> ntiles.x, part -> ntiles.y );
     dim3 block( 1024 );
 
+#if 0
+
+    // Use only for benchmarking
+    std::cout << "(*info*) Injecting uniform density using algorithm mk I\n";
     _inject_uniform_kernel <<< grid, block >>> ( 
             range, ppc, part -> nx, 
             part -> tiles, part -> data );
+
+#endif
+
+    _inject_uniform_kernel_mk2 <<< grid, block >>> ( 
+            range, ppc, part -> nx, 
+            part -> tiles, part -> data );
+
 }
 
 

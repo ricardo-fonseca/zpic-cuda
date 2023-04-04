@@ -395,7 +395,7 @@ __device__
 inline void _dep_current_seg(
     const int2 ix, const float2 x0, const float2 x1,
     const float2 qnx, const float qvz,
-    float3 * __restrict__ J, const int stride )
+    float3 * const __restrict__ J, const int stride )
 {
     const float S0x0 = 0.5f - x0.x;
     const float S0x1 = 0.5f + x0.x;
@@ -432,6 +432,156 @@ inline void _dep_current_seg(
 }
 
 
+__device__
+/**
+ * @brief Deposit (charge conserving) current for 1 segment inside a cell
+ * 
+ * @param ix        Particle cell
+ * @param x0        Initial particle position
+ * @param x1        Final particle position
+ * @param qnx       Normalization values for in plane current deposition
+ * @param qvz       Out of plane current
+ * @param J         current(J) grid (should be in shared memory)
+ * @param stride    current(J) grid stride
+ */
+inline void _dep_current_seg_mk1(
+    const int2 ix, const float2 x0, const float2 x1,
+    const float2 qnx, const float qvz,
+    float3 * __restrict__ J, const int stride )
+{
+    const float S0x0 = 0.5f - x0.x;
+    const float S0x1 = 0.5f + x0.x;
+
+    const float S1x0 = 0.5f - x1.x;
+    const float S1x1 = 0.5f + x1.x;
+
+    const float S0y0 = 0.5f - x0.y;
+    const float S0y1 = 0.5f + x0.y;
+
+    const float S1y0 = 0.5f - x1.y;
+    const float S1y1 = 0.5f + x1.y;
+
+    const float wl1 = qnx.x * (x1.x - x0.x);
+    const float wl2 = qnx.y * (x1.y - x0.y);
+    
+    const float wp10 = 0.5f*(S0y0 + S1y0);
+    const float wp11 = 0.5f*(S0y1 + S1y1);
+    
+    const float wp20 = 0.5f*(S0x0 + S1x0);
+    const float wp21 = 0.5f*(S0x1 + S1x1);
+
+    float * __restrict__ const Js = (float *) (&J[ix.x   + stride* ix.y]);
+    int const stride3 = 3 * stride;
+
+/*
+    //                   y    x  fc
+    atomicAdd( &Js[       0 + 0 + 0 ], wl1 * wp10 );
+    atomicAdd( &Js[ stride3 + 0 + 0 ], wl1 * wp11 );
+
+    atomicAdd( &Js[       0 + 0 + 1 ], wl2 * wp20 );
+    atomicAdd( &Js[       0 + 3 + 1 ], wl2 * wp21 );
+
+    atomicAdd( &Js[       0 + 0 + 2 ], qvz * ( S0x0 * S0y0 + S1x0 * S1y0 + (S0x0 * S1y0 - S1x0 * S0y0)/2.0f ));
+    atomicAdd( &Js[       0 + 3 + 2 ], qvz * ( S0x1 * S0y0 + S1x1 * S1y0 + (S0x1 * S1y0 - S1x1 * S0y0)/2.0f ));
+    atomicAdd( &Js[ stride3 + 0 + 2 ], qvz * ( S0x0 * S0y1 + S1x0 * S1y1 + (S0x0 * S1y1 - S1x0 * S0y1)/2.0f ));
+    atomicAdd( &Js[ stride3 + 3 + 2 ], qvz * ( S0x1 * S0y1 + S1x1 * S1y1 + (S0x1 * S1y1 - S1x1 * S0y1)/2.0f ));
+*/
+
+    // Reorder for linear access
+    //                   y    x  fc
+    atomicAdd( &Js[       0 + 0 + 0 ], wl1 * wp10 );
+    atomicAdd( &Js[       0 + 0 + 1 ], wl2 * wp20 );
+    atomicAdd( &Js[       0 + 0 + 2 ], qvz * ( S0x0 * S0y0 + S1x0 * S1y0 + (S0x0 * S1y0 - S1x0 * S0y0)/2.0f ));
+
+    atomicAdd( &Js[       0 + 3 + 1 ], wl2 * wp21 );
+    atomicAdd( &Js[       0 + 3 + 2 ], qvz * ( S0x1 * S0y0 + S1x1 * S1y0 + (S0x1 * S1y0 - S1x1 * S0y0)/2.0f ));
+
+    atomicAdd( &Js[ stride3 + 0 + 0 ], wl1 * wp11 );
+    atomicAdd( &Js[ stride3 + 0 + 2 ], qvz * ( S0x0 * S0y1 + S1x0 * S1y1 + (S0x0 * S1y1 - S1x0 * S0y1)/2.0f ));
+    atomicAdd( &Js[ stride3 + 3 + 2 ], qvz * ( S0x1 * S0y1 + S1x1 * S1y1 + (S0x1 * S1y1 - S1x1 * S0y1)/2.0f ));
+
+}
+
+__device__
+/**
+ * @brief Deposit (charge conserving) current for 1 segment inside a cell
+ * 
+ * @param ix        Particle cell
+ * @param x0        Initial particle position
+ * @param x1        Final particle position
+ * @param qnx       Normalization values for in plane current deposition
+ * @param qvz       Out of plane current
+ * @param J         current(J) grid (should be in shared memory)
+ * @param stride    current(J) grid stride
+ */
+inline void _dep_current_seg_mk2(
+    const int2 ix, const float2 x0, const float2 x1,
+    const float2 qnx, const float qvz,
+    float3 * __restrict__ J, const int stride )
+{
+    const float S0x0 = 0.5f - x0.x;
+    const float S0x1 = 0.5f + x0.x;
+
+    const float S1x0 = 0.5f - x1.x;
+    const float S1x1 = 0.5f + x1.x;
+
+    const float S0y0 = 0.5f - x0.y;
+    const float S0y1 = 0.5f + x0.y;
+
+    const float S1y0 = 0.5f - x1.y;
+    const float S1y1 = 0.5f + x1.y;
+
+    const float wl1 = qnx.x * (x1.x - x0.x);
+    const float wl2 = qnx.y * (x1.y - x0.y);
+    
+    const float wp10 = 0.5f*(S0y0 + S1y0);
+    const float wp11 = 0.5f*(S0y1 + S1y1);
+    
+    const float wp20 = 0.5f*(S0x0 + S1x0);
+    const float wp21 = 0.5f*(S0x1 + S1x1);
+
+    // 3 components times 2x2 points
+    float seg[ 3 * 2 * 2 ];
+
+    // x segments
+    seg[ 0 * 4 + 0*2 + 0 ] =  wl1 * wp10;
+    seg[ 0 * 4 + 0*2 + 1 ] =  0;
+    seg[ 0 * 4 + 1*2 + 0 ] =  wl1 * wp11;
+    seg[ 0 * 4 + 1*2 + 1 ] =  0;
+
+    // y segments
+    seg[ 1 * 4 + 0*2 + 0 ] =  wl2 * wp20;
+    seg[ 1 * 4 + 0*2 + 1 ] =  wl2 * wp21;
+    seg[ 1 * 4 + 1*2 + 0 ] =  0;
+    seg[ 1 * 4 + 1*2 + 1 ] =  0;
+
+    // z segments
+    seg[ 2 * 4 + 0*2 + 0 ] =  qvz * ( S0x0 * S0y0 + S1x0 * S1y0 + (S0x0 * S1y0 - S1x0 * S0y0)/2.0f );
+    seg[ 2 * 4 + 0*2 + 1 ] =  qvz * ( S0x1 * S0y0 + S1x1 * S1y0 + (S0x1 * S1y0 - S1x1 * S0y0)/2.0f );
+    seg[ 2 * 4 + 1*2 + 0 ] =  qvz * ( S0x0 * S0y1 + S1x0 * S1y1 + (S0x0 * S1y1 - S1x0 * S0y1)/2.0f );
+    seg[ 2 * 4 + 1*2 + 1 ] =  qvz * ( S0x1 * S0y1 + S1x1 * S1y1 + (S0x1 * S1y1 - S1x1 * S0y1)/2.0f );
+
+    float * __restrict__ const Js = (float *) J;
+
+
+    // 2.06 GP/s
+    const int k0 = 1;
+    const int k1 = 1;
+    const int k2 = 2;
+
+    #pragma unroll
+    for( int j = 0; j < 2; j++ ) {
+        #pragma unroll
+        for( int i = 0; i < 2; i++ ) {
+            int idx = 3 *( ix.x + i + stride * ( ix.y + j ) );
+            atomicAdd( &Js[idx + k0],   seg[ k0*4 + 2*j + i ]);
+            atomicAdd( &Js[idx + k1],   seg[ k1*4 + 2*j + i ]);
+            atomicAdd( &Js[idx + k2],   seg[ k2*4 + 2*j + i ]);
+        }
+    }
+}
+
+
 __global__
 void _move_deposit_kernel(
     t_part_tiles const tiles, t_part_data const data,
@@ -444,15 +594,6 @@ void _move_deposit_kernel(
     auto block = cg::this_thread_block();
 
     const int tile_size = roundup4( ext_nx.x * ext_nx.y );
-
-    // Zero current buffer
-    /*
-    for( int i = threadIdx.x; i < ext_nx.x * ext_nx.y; i += blockDim.x ) {
-        _move_deposit_buffer[i].x = 0;
-        _move_deposit_buffer[i].y = 0;
-        _move_deposit_buffer[i].z = 0;
-    }
-    */
 
     {   // use float4
         const float4 zero = make_float4( 0, 0, 0, 0 );
@@ -595,9 +736,15 @@ void _move_deposit_kernel(
         }
 
         // Deposit vp current
+#if 0
                        _dep_current_seg( v0_ix, v0_x0, v0_x1, qnx, v0_qvz, J, stride );
         if ( nvp > 1 ) _dep_current_seg( v1_ix, v1_x0, v1_x1, qnx, v1_qvz, J, stride );
         if ( nvp > 2 ) _dep_current_seg( v2_ix, v2_x0, v2_x1, qnx, v2_qvz, J, stride );
+#else
+                       _dep_current_seg_mk1( v0_ix, v0_x0, v0_x1, qnx, v0_qvz, J, stride );
+        if ( nvp > 1 ) _dep_current_seg_mk1( v1_ix, v1_x0, v1_x1, qnx, v1_qvz, J, stride );
+        if ( nvp > 2 ) _dep_current_seg_mk1( v2_ix, v2_x0, v2_x1, qnx, v2_qvz, J, stride );
+#endif
 
         // Correct position and store
         x1.x -= deltai.x;
@@ -849,9 +996,8 @@ inline float3 dudt_boris( const float alpha, float3 e, float3 b, float3 u, doubl
     u.z = fmaf( -b.x, ut.y, u.z );
 
     {
-        const float otsq = 2.0f / fmaf( b.z, b.z,
-                                fmaf( b.y, b.y, 
-                                fmaf( b.x, b.x, 1.0f ) ) );
+        const float otsq = 2.0f / 
+            fmaf( b.z, b.z, fmaf( b.y, b.y, fmaf( b.x, b.x, 1.0f ) ) );
         
         b.x *= otsq;
         b.y *= otsq;
@@ -873,6 +1019,7 @@ inline float3 dudt_boris( const float alpha, float3 e, float3 b, float3 u, doubl
 
     return ut;
 }
+
 
 __device__
 /**
@@ -968,8 +1115,8 @@ __device__
  * @param b[out]    B field at particleposition
  */
 void interpolate_fld( 
-    volatile float3 const * const __restrict__ E, 
-    volatile float3 const * const __restrict__ B, 
+    float3 const * const __restrict__ E, 
+    float3 const * const __restrict__ B, 
     const unsigned int stride,
     const int2 ix, const float2 x, float3 & e, float3 & b)
 {
@@ -996,6 +1143,7 @@ void interpolate_fld(
 
 
     // Interpolate E field
+
     e.x = ( E[ih +     j *stride].x * s0xh + E[ih+1 +     j*stride].x * s1xh ) * s0y +
           ( E[ih + (j +1)*stride].x * s0xh + E[ih+1 + (j+1)*stride].x * s1xh ) * s1y;
 
@@ -1014,6 +1162,87 @@ void interpolate_fld(
 
     b.z = ( B[ih +     jh*stride].z * s0xh + B[ih+1 +     jh*stride].z * s1xh ) * s0yh +
           ( B[ih + (jh+1)*stride].z * s0xh + B[ih+1 + (jh+1)*stride].z * s1xh ) * s1yh;
+
+}
+
+__device__
+/**
+ * @brief Interpolate EM field values at particle position using linear 
+ * (1st order) interpolation.
+ * 
+ * This version accesses E and B data using float (not float3) pointers and
+ * avoids some multiplications. There is a very marginal improvement over the
+ * baseline version, and it will be abandoned.
+ * 
+ * The EM fields are assumed to be organized according to the Yee scheme with
+ * the charge defined at lower left corner of the cell
+ * 
+ * @param E         Pointer to position (0,0) of E field grid
+ * @param B         Pointer to position (0,0) of B field grid
+ * @param stride    E and B grids y stride
+ * @param ix        Particle cell index
+ * @param x         Particle postion inside cell
+ * @param e[out]    E field at particle position
+ * @param b[out]    B field at particleposition
+ */
+void interpolate_fld_mk1( 
+    float3 const * const __restrict__ E, 
+    float3 const * const __restrict__ B, 
+    const unsigned int stride,
+    const int2 ix, const float2 x, float3 & e, float3 & b)
+{
+    int i = ix.x;
+    int j = ix.y;
+
+    const float s0x = 0.5f - x.x;
+    const float s1x = 0.5f + x.x;
+
+    const float s0y = 0.5f - x.y;
+    const float s1y = 0.5f + x.y;
+
+    const int hx = x.x < 0;
+    const int hy = x.y < 0;
+
+    int ih = i - hx;
+    int jh = j - hy;
+
+    const float s0xh = (1-hx) - x.x;
+    const float s1xh = (  hx) + x.x;
+
+    const float s0yh = (1-hy) - x.y;
+    const float s1yh = (  hy) + x.y;
+
+    int const stride3 = 3*stride;
+    j *= stride;
+    jh *= stride;
+
+    {
+        float * __restrict__ const Ex = (float *) (&E[ j  + ih ]);
+        float * __restrict__ const Ey = (float *) (&E[ jh + i  ]) + 1;
+        float * __restrict__ const Ez = (float *) (&E[ j  + i  ]) + 2;
+
+        e.x =   ( Ex[       0 + 0 ] * s0xh + Ex[       0 + 3 ] * s1xh ) * s0y +
+                ( Ex[ stride3 + 0 ] * s0xh + Ex[ stride3 + 3 ] * s1xh ) * s1y;
+        e.y =   ( Ey[       0 + 0 ] * s0x  + Ey[       0 + 3 ] * s1x  ) * s0yh +
+                ( Ey[ stride3 + 0 ] * s0x  + Ey[ stride3 + 3 ] * s1x  ) * s1yh;
+        e.z =   ( Ez[       0 + 0 ] * s0x  + Ez[       0 + 3 ] * s1x  ) * s0y +
+                ( Ez[ stride3 + 0 ] * s0x  + Ez[ stride3 + 3 ] * s1x  ) * s1y;
+    }
+
+    {
+        float * __restrict__ const Bx = (float *) (&B[ jh + i  ]);
+        float * __restrict__ const By = (float *) (&B[ j  + ih ]) + 1;
+        float * __restrict__ const Bz = (float *) (&B[ jh + ih ]) + 2;
+
+        b.x =   ( Bx[       0 + 0 ] * s0x  + Bx[       0 + 3 ] * s1x  ) * s0yh +
+                ( Bx[ stride3 + 0 ] * s0x  + Bx[ stride3 + 3 ] * s1x  ) * s1yh;
+        b.y =   ( By[       0 + 0 ] * s0xh + By[       0 + 3 ] * s1xh ) * s0y +
+                ( By[ stride3 + 0 ] * s0xh + By[ stride3 + 3 ] * s1xh ) * s1y;
+        b.z =   ( Bz[       0 + 0 ] * s0xh + Bz[       0 + 3 ] * s1xh ) * s0yh +
+                ( Bz[ stride3 + 0 ] * s0xh + Bz[ stride3 + 3 ] * s1xh ) * s1yh;
+    }
+
+
 }
 
 /**
@@ -1174,7 +1403,6 @@ void Species::push( VectorField * const E, VectorField * const B )
         break;
     }
 
-    deviceCheck();
 }
 
 __global__
