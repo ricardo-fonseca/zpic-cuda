@@ -7,6 +7,11 @@
 
 ## 2023.04.01
 
+* Changes the initial particle ordering. The new version places particles in different
+  cells in contiguous positions in the particle buffer, which reduces memory collisions
+  at electric current deposit
+* Minor optimizations to current deposition: access buffer as float[] (instead of 
+  float3[]), reorder operations for (near) linear memory access 
 * Adds test selection through (basic) command line option
 * Adds `benchmark` script to repeat a test several times and get average performance
 
