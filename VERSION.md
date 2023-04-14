@@ -3,7 +3,16 @@
 ## TO-DO
 
 * Thermal boundaries for particles
-* Improve particle tile sorter, make it production ready
+
+## 2023.04.14
+
+* Implements moving window support for low-memory particle sorter
+* Implements `Species::np_inject()` method that gets number of particles to be injected
+  per tile.
+* Sets the particle buffer size to 1.2 times the grid volume times ppc
+* Fixes issues with the LWFA test
+* Adds `filter.cuh` to `zpic.cuh`
+* Adds `ABORT()` macro, and includes additional information in the `CHECK_ERR()` macro.
 
 ## 2023.04.01
 

@@ -334,6 +334,15 @@ public:
 
     __host__
     /**
+     * @brief Gets number of particles that will be injected per tile
+     * 
+     * @param range     Range in which to inject particles
+     * @param np        Device pointer to number of particles to be injected per tile
+     */
+    virtual void np_inject( bnd<unsigned int> range, int * np );
+
+    __host__
+    /**
      * @brief Advance particle velocities
      * 
      * @param E     Electric field

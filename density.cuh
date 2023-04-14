@@ -21,6 +21,8 @@ namespace Density {
         virtual Profile * clone() const = 0;
         
         virtual void inject( Particles * part, uint2 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range ) const = 0;
+    
+        virtual void np_inject( Particles * part, uint2 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range, int * np ) const = 0;
     };
 
     /**
@@ -39,6 +41,10 @@ namespace Density {
         void inject( Particles * part, uint2 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range ) const override {
             // no injection
         };
+        void np_inject( Particles * part, uint2 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range, int * np ) const override {
+            // no injection
+            device::zero( np, part -> ntiles.x * part -> ntiles.y );
+        };
     };
 
 
@@ -56,6 +62,7 @@ namespace Density {
             return new Uniform(n0);
         };
         void inject( Particles * part, uint2 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range ) const override;
+        void np_inject( Particles * part, uint2 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range, int * np ) const override;
     };
 
     /**
@@ -75,6 +82,7 @@ namespace Density {
         };
 
         void inject( Particles * part, uint2 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range ) const override;
+        void np_inject( Particles * part, uint2 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range, int * np ) const override;
     };
 
     /**
@@ -95,6 +103,7 @@ namespace Density {
         };
 
         void inject( Particles * part, uint2 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range ) const override;
+        void np_inject( Particles * part, uint2 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range, int * np ) const override;
     };
 
     /**
@@ -115,6 +124,7 @@ namespace Density {
             return new Sphere(n0, center, radius);
         };
         void inject( Particles * part, uint2 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range ) const override;
+        void np_inject( Particles * part, uint2 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range, int * np ) const override;
     };
 
 }

@@ -46,6 +46,7 @@ Particles::Particles(uint2 const ntiles, uint2 const nx, unsigned int const max_
     // Allocate tile information array on device and initialize using a CUDA kernel
 
     malloc_dev( tiles.offset, ntiles.x * ntiles.y );
+    malloc_dev( tiles.offset2, ntiles.x * ntiles.y );
     malloc_dev( tiles.np, ntiles.x * ntiles.y );
     malloc_dev( tiles.np2, ntiles.x * ntiles.y );
 
@@ -394,7 +395,7 @@ void Particles::tile_sort() {
     // Create temporary buffer
     Particles tmp( ntiles, nx, max_np_tile );
 
-    tile_sort_mk3( tmp );
+    tile_sort( tmp, false );
 }
 
 /**
@@ -717,7 +718,8 @@ __global__
  */
 void _mk3_bnd_check( int2 const lim, 
     t_part_tiles const tiles, t_part_data const data, 
-    t_part_tiles const new_tiles, int * __restrict__ d_idx )
+    t_part_tiles const new_tiles, int * __restrict__ d_idx,
+    int2 const periodic )
 {
     auto block = cg::this_thread_block();
     auto warp  = cg::tiled_partition<32>(block);
@@ -770,14 +772,21 @@ void _mk3_bnd_check( int2 const lim,
         int ty = blockIdx.y + i / 3 - 1;
 
         // Correct for periodic boundaries
-        if ( tx < 0 ) tx += gridDim.x; 
-        if ( tx >= gridDim.x ) tx -= gridDim.x;
+        if ( periodic.x ) {
+            if ( tx < 0 ) tx += gridDim.x; 
+            if ( tx >= gridDim.x ) tx -= gridDim.x;
+        }
         
-        if ( ty < 0 ) ty += gridDim.y;
-        if ( ty >= gridDim.y ) ty -= gridDim.y;
-
-        int tid2 = ty * gridDim.x + tx;
-        atomicAdd( & new_tiles.np[ tid2 ], _npt[i] );
+        if ( periodic.y ) {
+            if ( ty < 0 ) ty += gridDim.y;
+            if ( ty >= gridDim.y ) ty -= gridDim.y;
+        }
+        
+        if ( ( tx >= 0 ) && ( tx < gridDim.x ) &&
+             ( ty >= 0 ) && ( ty < gridDim.y ) ) {
+            int tid2 = ty * gridDim.x + tx;
+            atomicAdd( & new_tiles.np[ tid2 ], _npt[i] );
+        }
     }
 
     if ( block.thread_rank() == 0 ) {
@@ -795,7 +804,7 @@ __global__
  * 
  * Outputs:
  * 1. tiles.offset new values (prefix scan of tiles.np)
- * 2. tiles.np2 is also set to offset
+ * 2. tiles.offset2 is also set to offset
  * 
  * @param tiles     Tile structure data
  * @param ntiles    Total number of tiles
@@ -832,7 +841,7 @@ void _mk3_update_offset( t_part_tiles const tiles, const unsigned int ntiles ) {
         tiles.offset[i] = v;
 
         // Also store offset on np2
-        tiles.np2[i] = v;
+        tiles.offset2[i] = v;
 
         if ((block.thread_rank() == block.num_threads() - 1) || ( i + 1 == ntiles ) )
             prev = v + s;
@@ -841,6 +850,64 @@ void _mk3_update_offset( t_part_tiles const tiles, const unsigned int ntiles ) {
     }
 
 }
+
+__global__
+/**
+ * @brief CUDA kernel for recalculating particle tile offset
+ * 
+ * Inputs:
+ * 1. tiles.np values
+ * 2. tiles.np2 values
+ * 
+ * Outputs:
+ * 1. tiles.offset new values (prefix scan of tiles.np + tiles.np2)
+ * 2. tiles.offset2 is also set to offset
+ * 
+ * @param tiles     Tile structure data
+ * @param ntiles    Total number of tiles
+ */
+void _mk3_update_offset_np2( t_part_tiles const tiles, const unsigned int ntiles ) {
+    // 32 is the current maximum number of warps
+    __shared__ int tmp[ 32 ];
+    __shared__ int prev;
+
+    auto block = cg::this_thread_block();
+    auto warp  = cg::tiled_partition<32>(block);
+
+    // Contribution from previous warp
+    prev = 0;
+
+    for( unsigned int i = block.thread_rank(); i < ntiles; i += block.num_threads() ) {
+
+        auto s = tiles.np[i] + tiles.np2[i];
+
+        auto v = cg::exclusive_scan( warp, s, cg::plus<int>());
+        if ( warp.thread_rank() == warp.num_threads() - 1 ) tmp[ warp.meta_group_rank() ] = v + s;
+        block.sync();
+
+        // Only 1 warp does this
+        if ( warp.meta_group_rank() == 0 ) {
+            auto t = tmp[ warp.thread_rank() ];
+            t = cg::exclusive_scan( warp, t, cg::plus<int>());
+            tmp[ warp.thread_rank() ] = t + prev;
+        }
+        block.sync();
+
+        // Add in contribution from previous threads
+        v += tmp[ warp.meta_group_rank() ];
+        tiles.offset[i] = v;
+
+        // Also store offset on offset2
+        tiles.offset2[i] = v;
+
+        if ((block.thread_rank() == block.num_threads() - 1) || ( i + 1 == ntiles ) )
+            prev = v + s;
+
+        block.sync();
+    }
+
+}
+
 
 __global__
 /**
@@ -855,7 +922,8 @@ __global__
  */
 void _mk3_copy_out( int2 const lim, 
     t_part_tiles const tiles, t_part_data const data, int * __restrict__ d_idx,
-    t_part_tiles const tmp_tiles, t_part_data const tmp_data )
+    t_part_tiles const tmp_tiles, t_part_data const tmp_data,
+    int2 const periodic )
 {
 
     auto block = cg::this_thread_block();
@@ -890,8 +958,12 @@ void _mk3_copy_out( int2 const lim,
     // because tile position in memory has shifted
     int nshift;
     if ( new_offset >= old_offset ) {
+        // Buffer has shifted right, copy particles left behind to end of buffer
         nshift = new_offset - old_offset;
     } else {
+        // Buffer has shifted left, attempt to fill initial space with particles
+        // coming from other tiles, use additional particles from end of buffer
+        // if needed
         nshift = (old_offset + n0) - (new_offset + new_np);
         if ( nshift < 0 ) nshift = 0;
     }
@@ -899,8 +971,9 @@ void _mk3_copy_out( int2 const lim,
     // At most n0 particles will be shifted
     if ( nshift > n0 ) nshift = n0;
 
+    // Reserve space in the tmp array
     if( block.thread_rank() == 0 ) {
-        _dir_offset[4] = atomicAdd( & tmp_tiles.np2[ tid ], nshift );
+        _dir_offset[4] = atomicAdd( & tmp_tiles.offset2[ tid ], nshift );
     }
     block.sync();
 
@@ -912,16 +985,31 @@ void _mk3_copy_out( int2 const lim,
             int tx = blockIdx.x + i % 3 - 1;
             int ty = blockIdx.y + i / 3 - 1;
 
+            bool valid = true;
+
             // Correct for periodic boundaries
-            if ( tx < 0 ) tx += gridDim.x; 
-            if ( tx >= gridDim.x ) tx -= gridDim.x;
-            
-            if ( ty < 0 ) ty += gridDim.y;
-            if ( ty >= gridDim.y ) ty -= gridDim.y;
+            if ( periodic.x ) {
+                if ( tx < 0 ) tx += gridDim.x; 
+                if ( tx >= gridDim.x ) tx -= gridDim.x;
+            } else {
+                valid &= ( tx >= 0 ) && ( tx < gridDim.x ); 
+            }
 
-            int tid2 = ty * gridDim.x + tx;
+            if ( periodic.y ) {
+                if ( ty < 0 ) ty += gridDim.y;
+                if ( ty >= gridDim.y ) ty -= gridDim.y;
+            } else {
+                valid &= ( ty >= 0 ) && ( ty < gridDim.y ); 
+            }
 
-            _dir_offset[i] = atomicAdd( & tmp_tiles.np2[ tid2 ], npt[ i ] );
+            if ( valid ) {
+                // If valid neighbour tile reserve space on tmp. array
+                int tid2 = ty * gridDim.x + tx;
+                _dir_offset[i] = atomicAdd( & tmp_tiles.offset2[ tid2 ], npt[ i ] );
+            } else {
+                // Otherwise mark offset as invalid
+                _dir_offset[i] = -1;
+            }
         } 
     }
 
@@ -941,16 +1029,22 @@ void _mk3_copy_out( int2 const lim,
         
         int xcross = ( nix.x >= lim.x ) - ( nix.x < 0 );
         int ycross = ( nix.y >= lim.y ) - ( nix.y < 0 );
-        
-        nix.x -= xcross * lim.x;
-        nix.y -= ycross * lim.y;
 
-        // _dir_offset[] includes the offset in the global tmp particle buffer
-        int l = atomicAdd( & _dir_offset[(ycross+1) * 3 + (xcross+1)], 1 );
+        const int dir = (ycross+1) * 3 + (xcross+1);
 
-        tmp_ix[ l ] = nix;
-        tmp_x[ l ] = nx;
-        tmp_u[ l ] = nu;
+        // Check if particle crossed into a valid neighbor
+        if ( _dir_offset[dir] >= 0 ) {        
+
+            // _dir_offset[] includes the offset in the global tmp particle buffer
+            int l = atomicAdd( & _dir_offset[dir], 1 );
+
+            nix.x -= xcross * lim.x;
+            nix.y -= ycross * lim.y;
+
+            tmp_ix[ l ] = nix;
+            tmp_x[ l ] = nx;
+            tmp_u[ l ] = nu;
+        }
 
         // Fill hole if needed
         if ( k < n0 ) {
@@ -965,6 +1059,9 @@ void _mk3_copy_out( int2 const lim,
             ix[ k ] = ix[ c ];
             x [ k ] = x [ c ];
             u [ k ] = u [ c ];
+
+            // Invalidate data for debug purposes
+            // ix[ c ].x = -1234;
         }
     }
 
@@ -973,6 +1070,7 @@ void _mk3_copy_out( int2 const lim,
 
 
     // Copy particles that need to be shifted
+    // We've reserved space for nshift particles earlier
     const int new_idx = _dir_offset[4];
 
     if ( new_offset >= old_offset ) {
@@ -1015,7 +1113,7 @@ void _mk3_copy_in(
     const int old_offset       =  tiles.offset[ tid ];
     const int old_np           =  tiles.np[ tid ];
     const int new_offset       =  tmp_tiles.offset[ tid ];
-    const int tmp_np           =  tmp_tiles.np2[ tid ] - new_offset;
+    const int tmp_np           =  tmp_tiles.offset2[ tid ] - new_offset;
 
     // Notice that we are already working with the new offset
     int2   * __restrict__ ix  = &data.ix[ new_offset ];
@@ -1066,7 +1164,18 @@ void _mk3_copy_in(
 }
 
 __host__
-void Particles::tile_sort_mk3( Particles &tmp ) {
+/**
+ * @brief in-place low memory tile sort (default)
+ * 
+ * If offset_np2 is false (the default) then the particle buffer will be
+ * perfectly compacted (no spaces between tiles). If it is true, the routine
+ * will leave room for additional np2 particles in each tile (which is useful
+ * for adding more particles afterwards)
+ * 
+ * @param tmp           Temporary staging area for particles moving across tiles
+ * @param offset_np2    Include np2 values in offset calculations
+ */
+void Particles::tile_sort( Particles &tmp, bool offset_np2 ) {
     dim3 grid( ntiles.x, ntiles.y );
     dim3 block( 1024 );
 
@@ -1074,28 +1183,41 @@ void Particles::tile_sort_mk3( Particles &tmp ) {
     lim.x = nx.x;
     lim.y = nx.y;
 
-    // Get new number of particles per tile
     device::zero( tmp.tiles.np, ntiles.x * ntiles.y );
+
+    // Get new number of particles per tile
     _mk3_bnd_check<<< grid, block >>> ( 
-        lim, tiles, data, tmp.tiles, idx
+        lim, tiles, data, tmp.tiles, idx, periodic
     );
 
     // Get new offsets (prefix scan of np)
-    _mk3_update_offset<<< 1, 1024 >>> (
-        tmp.tiles, ntiles.x * ntiles.y
-    );
+    if ( offset_np2 ) {
+        // Includes np2 values in offset calculations
+        // Used to reserve space on particle buffer for later injection
+        _mk3_update_offset_np2<<< 1, 1024 >>> (
+            tmp.tiles, ntiles.x * ntiles.y
+        );
+    } else {
+        _mk3_update_offset<<< 1, 1024 >>> (
+            tmp.tiles, ntiles.x * ntiles.y
+        );
+    }
 
+    // Copy outgoing particles (and particles needing shifting) to staging area
     _mk3_copy_out <<< grid, block >>> ( 
         lim, tiles, data, idx,
-        tmp.tiles, tmp.data
+        tmp.tiles, tmp.data, periodic
     );
 
+    // Copy particles from staging area into final positions in partile buffer
     _mk3_copy_in <<< grid, block >>> ( 
         tiles, data,
         tmp.tiles, tmp.data
     );
 
-    //validate( "After tile_sort_mk3() ");
+    // For debug only, remove from production code
+    // validate( "After tile_sort_mk3");
+
 }
 
 __global__
@@ -1423,6 +1545,8 @@ __global__
  * @param over 
  * @param out 
  */
+
+#if 0
 void _validate( 
     t_part_tiles const tiles,  t_part_data const data,
     uint2 const nx, int const over, unsigned int * out ) {
@@ -1480,6 +1604,37 @@ void _validate(
         }
     }
 }
+
+#else
+
+void _validate( 
+    t_part_tiles const tiles,  t_part_data const data,
+    uint2 const nx, int const over, unsigned int * out ) {
+
+    int const tid = blockIdx.y * gridDim.x + blockIdx.x;
+
+    int const offset = tiles.offset[ tid ];
+    int const np     = tiles.np[ tid ];
+    int2   const * const __restrict__ ix = &data.ix[ offset ];
+    float2 const * const __restrict__ x  = &data.x[ offset ];
+    float3 const * const __restrict__ u  = &data.u[ offset ];
+
+    int2 const lb = make_int2( -over, -over );
+    int2 const ub = make_int2( nx.x + over, nx.y + over ); 
+
+    for( int i = threadIdx.x; i < np; i += blockDim.x) {
+        if ( (ix[i].x < lb.x) || (ix[i].x >= ub.x )) { atomicAdd(out,1); break; }
+        // if ( (ix[i].x < lb.x) || (ix[i].x >= ub.x )) { printf("[%d,%d] invalid particle %d\n", gridDim.x, gridDim.y,i ); atomicAdd(out,1); break; }
+        if ( (ix[i].y < lb.y) || (ix[i].y >= ub.y )) { atomicAdd(out,1); break; }
+        if ( isnan(u[i].x) || isinf(u[i].x) || fabsf(u[i].x) >= __ULIM ) { atomicAdd(out,1); break; }
+        if ( isnan(u[i].y) || isinf(u[i].y) || fabsf(u[i].x) >= __ULIM ){ atomicAdd(out,1); break; }
+        if ( isnan(u[i].z) || isinf(u[i].z) || fabsf(u[i].x) >= __ULIM ) { atomicAdd(out,1); break; }
+        if ( x[i].x < -0.5f || x[i].x >= 0.5f ) { atomicAdd(out,1); break; }
+        if ( x[i].y < -0.5f || x[i].y >= 0.5f ) { atomicAdd(out,1); break; }
+    }
+}
+
+#endif
 
 
 template < coord::cart dir >
@@ -1574,8 +1729,7 @@ void Particles::validate( std::string msg, int const over ) {
     if ( nerr > 0 ) {
         std::cerr << "(*error*) " << msg << "\n";
         std::cerr << "(*error*) invalid particle, aborting...\n";
-        cudaDeviceReset();
-        exit(1);
+        cudaDeviceReset(); exit(1);
     }
 }
 
@@ -1583,37 +1737,4 @@ void Particles::validate( std::string msg ) {
 
     validate( msg, 0 );
 
-}
-
-/**
- * @brief Check if tiles are full
- * 
- * OBSOLETE: To be removed
- * 
- */
-void Particles::check_tiles() {
-
-    int * h_tile_np;
-    malloc_host( h_tile_np, ntiles.x * ntiles.y );
-
-    devhost_memcpy( h_tile_np, tiles.np, ntiles.x * ntiles.y );
-
-    int np = 0;
-    int max = 0;
-
-    for( int i = 0; i < ntiles.x * ntiles.y; i++ ) {
-        np += h_tile_np[i];
-        if ( h_tile_np[i] > max ) max = h_tile_np[i];
-    }
-
-    printf("(*info*) #part tile: %g (avg), %d (max), %d (lim)\n", 
-        float(np) / (ntiles.x * ntiles.y), max, max_np_tile );
-
-    if ( max >= 0.9 * max_np_tile ) {
-        printf("(*critical*) Buffer almost full!\n");
-        cudaDeviceReset();
-        exit(1);
-    }
-
-    free_host( h_tile_np );
 }

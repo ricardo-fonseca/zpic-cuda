@@ -60,6 +60,7 @@ class Simulation {
             if ( err_async != cudaSuccess )
                 std::cerr << "(*error*) Async. error message: " << cudaGetErrorString(err_async)
                      << " (" << err_async << ") \n";
+            cudaDeviceReset();
             exit(1);
         }
     };

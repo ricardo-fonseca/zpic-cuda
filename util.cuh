@@ -101,9 +101,19 @@ T roundup( T a ) {
     if ( err_ != cudaSuccess ) { \
         std::cerr << "(*error*) " << msg_ << std::endl; \
         std::cerr << "(*error*) code: " << err_ << ", reason: " << cudaGetErrorString(err_) << std::endl; \
+        std::cerr << "(*error*) error state in " << __func__ << "()"; \
+        std::cerr << " (" << __FILE__ << ":" << __LINE__ << ")\n"; \
         cudaDeviceReset(); \
         exit(1); \
     } \
+}
+
+#define ABORT( msg_ ) { \
+    std::cerr << "(*error*) " << msg_ << "\n"; \
+    std::cerr << "(*error*) abort issued in " << __func__ << "()"; \
+    std::cerr << " (" << __FILE__ << ":" << __LINE__ << ")\n"; \
+    cudaDeviceReset(); \
+    exit(1); \
 }
 
 /**

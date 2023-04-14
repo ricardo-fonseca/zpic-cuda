@@ -18,7 +18,7 @@ __global__
  * @param d_x       Particle data (position)
  * @param d_u       Particle data (generalized velocity)
  */
-void _inject_uniform_kernel( bnd<unsigned int> range,
+void _inject_uniform_kernel_mk1( bnd<unsigned int> range,
     uint2 const ppc, uint2 const nx, 
     t_part_tiles const tiles,
     t_part_data const data )
@@ -101,20 +101,18 @@ void _inject_uniform_kernel( bnd<unsigned int> range,
 
 __global__
 /**
- * @brief CUDA kernel for injecting a uniform plasma density mk2
+ * @brief CUDA kernel for injecting a uniform plasma density (mk2)
  * 
  * Places contiguous particles in different cells. This minimizes memory collisions
  * when depositing current, especially for very low temperatures.
  * 
- * @param range     Cell range (global) to inject particles in
- * @param ppc       Number of particles per cell
- * @param nx        Number of cells in tile
- * @param d_tiles   Particle tile information
- * @param d_ix      Particle data (cell)
- * @param d_x       Particle data (position)
- * @param d_u       Particle data (generalized velocity)
+ * @param range     Cell range (global) to inject particles in 
+ * @param ppc       Number of particles per cell 
+ * @param nx        Number of cells in tile 
+ * @param tiles     Particle tile information 
+ * @param data      Particle data 
  */
-void _inject_uniform_kernel_mk2( bnd<unsigned int> range,
+void _inject_uniform_kernel( bnd<unsigned int> range,
     uint2 const ppc, uint2 const nx, 
     t_part_tiles const tiles,
     t_part_data const data )
@@ -210,18 +208,86 @@ void Density::Uniform::inject( Particles * part,
 
     // Use only for benchmarking
     std::cout << "(*info*) Injecting uniform density using algorithm mk I\n";
-    _inject_uniform_kernel <<< grid, block >>> ( 
+    _inject_uniform_kernel_mk1 <<< grid, block >>> ( 
             range, ppc, part -> nx, 
             part -> tiles, part -> data );
 
 #endif
 
-    _inject_uniform_kernel_mk2 <<< grid, block >>> ( 
+    _inject_uniform_kernel <<< grid, block >>> ( 
             range, ppc, part -> nx, 
             part -> tiles, part -> data );
+    
+    deviceCheck();
 
 }
 
+__global__
+/**
+ * @brief CUDA kernel for counting how many particles will be injected
+ * 
+ * @param range     Cell range (global) to inject particles in
+ * @param ppc       Number of particles per cell
+ * @param nx        Number of cells in tile
+ * @param d_tiles   Particle tile information
+ * @param np        Number of particles to inject (out)
+ */
+void _np_inject_uniform_kernel( bnd<unsigned int> range,
+    uint2 const ppc, uint2 const nx, 
+    t_part_tiles const tiles,
+    int * np )
+{
+
+    int const tid = blockIdx.y * gridDim.x + blockIdx.x;
+
+        // Find injection range in tile coordinates
+    int ri0 = range.x.lower - blockIdx.x * nx.x;
+    int ri1 = range.x.upper - blockIdx.x * nx.x;
+
+    int rj0 = range.y.lower - blockIdx.y * nx.y;
+    int rj1 = range.y.upper - blockIdx.y * nx.y;
+
+    // Comparing signed and unsigned integers does not work here
+    int const nxx = nx.x;
+    int const nxy = nx.y;
+
+    int _np;
+
+    // If range overlaps with tile
+    if (( ri0 < nxx ) && ( ri1 >= 0 ) &&
+        ( rj0 < nxy ) && ( rj1 >= 0 )) {
+        
+        // Limit to range inside this tile
+        if (ri0 < 0) ri0 = 0;
+        if (rj0 < 0) rj0 = 0;
+        if (ri1 >= nxx ) ri1 = nxx-1;
+        if (rj1 >= nxy ) rj1 = nxy-1;
+
+        int const row = (ri1-ri0+1);
+        int const vol = (rj1-rj0+1) * row;
+
+        _np = vol * ppc.x * ppc.y;
+
+    } else {
+        _np = 0;
+    }
+
+    np[ tid ] = _np;
+}
+
+void Density::Uniform::np_inject( Particles * part, 
+    uint2 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range,
+    int * np ) const
+{
+    dim3 grid( part -> ntiles.x, part -> ntiles.y );
+    
+    // Run serial inside block
+    dim3 block( 1 );
+
+    _np_inject_uniform_kernel <<< grid, block >>> (
+        range, ppc, part -> nx, part -> tiles, np
+    );
+}
 
 /**
  * @brief CUDA kernel for injecting step profile
@@ -341,6 +407,107 @@ void Density::Step::inject( Particles * part,
         _inject_step_kernel <coord::y> <<< grid, block >>> (
             range, step_pos, ppc, part -> nx, 
             part -> tiles, part -> data );
+        break;
+    break;
+    }
+}
+
+template < coord::cart dir >
+__global__
+void _np_inject_step_kernel( bnd<unsigned int> range,
+    const float step, const uint2 ppc, const uint2 nx,
+    t_part_tiles const tiles, int * np )
+{
+    auto block = cg::this_thread_block();
+    auto warp  = cg::tiled_partition<32>(block);
+
+    int const tid = blockIdx.y * gridDim.x + blockIdx.x;
+
+    __shared__ int _np;
+    _np = 0;
+    block.sync();
+
+    // Find injection range in tile coordinates
+    int ri0 = range.x.lower - blockIdx.x * nx.x;
+    int ri1 = range.x.upper - blockIdx.x * nx.x;
+
+    int rj0 = range.y.lower - blockIdx.y * nx.y;
+    int rj1 = range.y.upper - blockIdx.y * nx.y;
+
+    // Comparing signed and unsigned integers does not work
+    int const nxx = nx.x;
+    int const nxy = nx.y;
+    
+    unsigned int inj_np = 0;
+
+    // If range overlaps with tile
+    if (( ri0 < nxx ) && ( ri1 >= 0 ) &&
+        ( rj0 < nxy ) && ( rj1 >= 0 )) {
+
+        // Limit to range inside this tile
+        if (ri0 < 0) ri0 = 0;
+        if (rj0 < 0) rj0 = 0;
+        if (ri1 >= nxx ) ri1 = nxx-1;
+        if (rj1 >= nxy ) rj1 = nxy-1;
+
+        int const row = (ri1-ri0+1);
+        int const vol = (rj1-rj0+1) * row;
+
+        double dpcx = 1.0 / ppc.x;
+        double dpcy = 1.0 / ppc.y;
+
+        const int shiftx = blockIdx.x * nx.x;
+        const int shifty = blockIdx.y * nx.y;
+
+        for( int idx = threadIdx.x; idx < vol; idx+= blockDim.x) {
+            int2 const cell = make_int2(
+                idx % row + ri0,
+                idx / row + rj0
+            );
+            for( int i1 = 0; i1 < ppc.y; i1++ ) {
+                for( int i0 = 0; i0 < ppc.x; i0++) {
+                    float2 const pos = make_float2(
+                        dpcx * ( i0 + 0.5 ) - 0.5,
+                        dpcy * ( i1 + 0.5 ) - 0.5
+                    );
+                    float t;
+                    if ( dir == coord::x ) t = (shiftx + cell.x) + (pos.x + 0.5);
+                    if ( dir == coord::y ) t = (shifty + cell.y) + (pos.y + 0.5);
+                    if ( t > step ) inj_np++;
+                }
+            }
+        }
+    }    
+
+    inj_np = cg::reduce( warp, inj_np, cg::plus<unsigned int>());
+    if ( warp.thread_rank() == 0 ) atomicAdd( &_np, inj_np );
+
+    block.sync();
+
+    if ( block.thread_rank() == 0 )
+        np[ tid ] = _np;
+
+}
+
+void Density::Step::np_inject( Particles * part, 
+    uint2 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range,
+    int * np ) const
+{
+    dim3 grid( part -> ntiles.x, part -> ntiles.y );
+    dim3 block( 1024 );
+
+    float step_pos = (pos - ref.x) / dx.x;
+
+    switch( dir ) {
+    case( coord::x ):
+        _np_inject_step_kernel <coord::x> <<< grid, block >>> (
+            range, step_pos, ppc, part -> nx, 
+            part -> tiles, np );
+        break;
+    case( coord::y ):
+        _np_inject_step_kernel <coord::y> <<< grid, block >>> (
+            range, step_pos, ppc, part -> nx, 
+            part -> tiles, np );
         break;
     break;
     }
@@ -470,6 +637,108 @@ void Density::Slab::inject( Particles * part,
 
 }
 
+template < coord::cart dir >
+__global__
+void _np_inject_slab_kernel( bnd<unsigned int> range,
+    const float start, const float finish, uint2 ppc, uint2 nx,
+    t_part_tiles const tiles, int * np )
+{
+    auto block = cg::this_thread_block();
+    auto warp  = cg::tiled_partition<32>(block);
+
+    int const tid = blockIdx.y * gridDim.x + blockIdx.x;
+
+    __shared__ int _np;
+    _np = 0;
+    block.sync();
+
+    // Find injection range in tile coordinates
+    int ri0 = range.x.lower - blockIdx.x * nx.x;
+    int ri1 = range.x.upper - blockIdx.x * nx.x;
+
+    int rj0 = range.y.lower - blockIdx.y * nx.y;
+    int rj1 = range.y.upper - blockIdx.y * nx.y;
+
+    // Comparing signed and unsigned integers does not work
+    int const nxx = nx.x;
+    int const nxy = nx.y;
+
+    unsigned int inj_np = 0;
+
+    // If range overlaps with tile
+    if (( ri0 < nxx ) && ( ri1 >= 0 ) &&
+        ( rj0 < nxy ) && ( rj1 >= 0 )) {
+
+        // Limit to range inside this tile
+        if (ri0 < 0) ri0 = 0;
+        if (rj0 < 0) rj0 = 0;
+        if (ri1 >= nxx ) ri1 = nxx-1;
+        if (rj1 >= nxy ) rj1 = nxy-1;
+
+        int const row = (ri1-ri0+1);
+        int const vol = (rj1-rj0+1) * row;
+
+        double dpcx = 1.0 / ppc.x;
+        double dpcy = 1.0 / ppc.y;
+
+        const int shiftx = blockIdx.x * nx.x;
+        const int shifty = blockIdx.y * nx.y;
+
+        for( int idx = threadIdx.x; idx < vol; idx+= blockDim.x) {
+            int2 const cell = make_int2(
+                idx % row + ri0,
+                idx / row + rj0
+            );
+            for( int i1 = 0; i1 < ppc.y; i1++ ) {
+                for( int i0 = 0; i0 < ppc.x; i0++) {
+                    float2 const pos = make_float2(
+                        dpcx * ( i0 + 0.5 ) - 0.5,
+                        dpcy * ( i1 + 0.5 ) - 0.5
+                    );
+                    float t;
+                    if ( dir == coord::x ) t = (shiftx + cell.x) + (pos.x + 0.5);
+                    if ( dir == coord::y ) t = (shifty + cell.y) + (pos.y + 0.5);
+                    if ((t > start) && (t<finish )) inj_np++;
+                }
+            }
+        }
+    }
+
+    inj_np = cg::reduce( warp, inj_np, cg::plus<unsigned int>());
+    if ( warp.thread_rank() == 0 ) atomicAdd( &_np, inj_np );
+
+    block.sync();
+
+    if ( block.thread_rank() == 0 )
+        np[ tid ] = _np;
+
+}
+
+void Density::Slab::np_inject( Particles * part, 
+    uint2 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range,
+    int * np ) const
+{
+    dim3 grid( part -> ntiles.x, part -> ntiles.y );
+    dim3 block( 1024 );
+
+    float slab_begin = (begin - ref.x)/ dx.x;
+    float slab_end = (end - ref.x)/ dx.x;
+
+    switch( dir ) {
+    case( coord::x ):
+        _np_inject_slab_kernel < coord::x > <<< grid, block >>> (
+            range, slab_begin, slab_end, ppc, part -> nx, 
+            part -> tiles, np );
+        break;
+    case( coord::y ):
+        _np_inject_slab_kernel < coord::y > <<< grid, block >>> (
+            range, slab_begin, slab_end, ppc, part -> nx, 
+            part -> tiles, np );
+        break;
+    }
+}
+
+
 /**
  * @brief CUDA kernel for injecting sphere profile
  * 
@@ -585,4 +854,99 @@ void Density::Sphere::inject( Particles * part,
     _inject_sphere_kernel <<< grid, block >>> (
         range, sphere_center, radius, dx, ppc, part -> nx, 
         part -> tiles, part -> data );
+}
+
+__global__
+void _np_inject_sphere_kernel( bnd<unsigned int> range,
+    float2 center, float radius, float2 dx, uint2 ppc, uint2 nx,
+    t_part_tiles const tiles, int * np )
+{
+
+    auto block = cg::this_thread_block();
+    auto warp  = cg::tiled_partition<32>(block);
+
+    int const tid = blockIdx.y * gridDim.x + blockIdx.x;
+
+    __shared__ int _np;
+    _np = 0;
+    block.sync();
+
+    // Comparing signed and unsigned integers does not work
+    int const nxx = nx.x;
+    int const nxy = nx.y;
+
+    // Find injection range in tile coordinates
+    int ri0 = range.x.lower - blockIdx.x * nxx;
+    int ri1 = range.x.upper - blockIdx.x * nxx;
+
+    int rj0 = range.y.lower - blockIdx.y * nxy;
+    int rj1 = range.y.upper - blockIdx.y * nxy;
+
+    unsigned int inj_np = 0;
+    
+    // If range overlaps with tile
+    if (( ri0 < nxx ) && ( ri1 >= 0 ) &&
+        ( rj0 < nxy ) && ( rj1 >= 0 )) {
+
+        // Limit to range inside this tile
+        if (ri0 < 0) ri0 = 0;
+        if (rj0 < 0) rj0 = 0;
+        if (ri1 >= nxx ) ri1 = nxx-1;
+        if (rj1 >= nxy ) rj1 = nxy-1;
+
+        int const row = (ri1-ri0+1);
+        int const vol = (rj1-rj0+1) * row;
+
+        double dpcx = 1.0 / ppc.x;
+        double dpcy = 1.0 / ppc.y;
+
+        const int shiftx = blockIdx.x * nxx;
+        const int shifty = blockIdx.y * nxy;
+        const float r2 = radius*radius;
+
+        for( int idx = threadIdx.x; idx < vol; idx+= blockDim.x) {
+            int2 const cell = make_int2( 
+                idx % row + ri0,
+                idx / row + rj0
+            );
+            for( int i1 = 0; i1 < ppc.y; i1++ ) {
+                for( int i0 = 0; i0 < ppc.x; i0++) {
+                    float2 const pos = make_float2(
+                        dpcx * ( i0 + 0.5 ) - 0.5,
+                        dpcy * ( i1 + 0.5 ) - 0.5
+                    );
+                    float gx = ((shiftx + cell.x) + (pos.x+0.5)) * dx.x;
+                    float gy = ((shifty + cell.y) + (pos.y+0.5)) * dx.y;
+                    
+                    if ( (gx - center.x)*(gx - center.x) + (gy - center.y)*(gy - center.y) < r2 ) 
+                        inj_np++;
+                }
+            }
+        }
+    }
+
+    inj_np = cg::reduce( warp, inj_np, cg::plus<unsigned int>());
+    if ( warp.thread_rank() == 0 ) atomicAdd( &_np, inj_np );
+
+    block.sync();
+
+    if ( block.thread_rank() == 0 )
+        np[ tid ] = _np;
+
+}
+
+void Density::Sphere::np_inject( Particles * part, 
+    uint2 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range,
+    int * np ) const
+{
+    dim3 grid( part -> ntiles.x, part -> ntiles.y );
+    dim3 block( 1024 );
+
+    float2 sphere_center = center;
+    sphere_center.x -= ref.x;
+    sphere_center.y -= ref.y;
+
+    _np_inject_sphere_kernel <<< grid, block >>> (
+        range, sphere_center, radius, dx, ppc, part -> nx, 
+        part -> tiles, np );
 }

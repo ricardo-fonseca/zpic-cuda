@@ -31,11 +31,15 @@ typedef struct ParticleTiles {
 
     /// @brief Number of particles in tile
     int * np;
+    
     /// @brief Tile particle position on global array
     int * offset;
 
     /// @brief Secondary number of particles in tile
     int * np2;
+
+    /// @brief Secondary tile particle position on global array
+    int * offset2;
 
     /// @brief Number of particles in index list
     int * nidx;
@@ -92,9 +96,10 @@ class Particles {
         free_dev( data.ix );
         free_dev( idx );
 
-        free_dev( tiles.np );
         free_dev( tiles.nidx );
         free_dev( tiles.offset );
+        free_dev( tiles.offset2 );
+        free_dev( tiles.np );
         free_dev( tiles.np2 );
     }
 
@@ -166,7 +171,7 @@ class Particles {
     void tile_sort_mk4( Particles &tmp );
 
     // in-place low memory tile sort
-    void tile_sort_mk3( Particles &tmp );
+    void tile_sort( Particles &tmp, bool offset_np2 );
 
     // out of place tile sort (used when growing buffer)
     void tile_sort_mk2( Particles &tmp );
@@ -175,7 +180,26 @@ class Particles {
     void save( zdf::part_info &info, zdf::iteration &iter, std::string path );
 
     __host__
-    void check_tiles();
+    /**
+     * @brief Prints out 
+     * 
+     * @param d_n 
+     */
+    inline void tile_info( int * d_n ) {
+        int * h_n;
+        size_t size = ntiles.x * ntiles.y;
+        malloc_host( h_n, size );
+        devhost_memcpy( h_n, d_n, size );
+        for( int j = 0; j < ntiles.y; j++ ) {
+            printf("%5d | ", j );
+            for( int i = 0; i < ntiles.x; i++ ) {
+                int tid = i + j * ntiles.x;
+                printf(" %5d", h_n[tid]);
+            }
+            printf("\n");
+        }
+        free_host( h_n );
+    };
 };
 
 

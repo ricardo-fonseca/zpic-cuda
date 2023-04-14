@@ -95,7 +95,7 @@ void Species::initialize( float2 const box_, uint2 const ntiles, uint2 const nx,
 // Set false to use large memory buffer
 #if 1
     // std::cerr << "(*development*) Setting small memory buffer for species '" << name << "'\n";
-    unsigned int np_max = nx.x * nx.y * ppc.x * ppc.y;
+    unsigned int np_max = nx.x * nx.y * ppc.x * ppc.y * 1.2;
 #else
     unsigned int np_max = nx.x * nx.y * ppc.x * ppc.y * 8;
 #endif
@@ -184,6 +184,23 @@ void Species::inject( bnd<unsigned int> range ) {
     float2 ref = make_float2( moving_window.motion(), 0 );
 
     density -> inject( particles, ppc, dx, ref, range );
+}
+
+/**
+ * @brief Gets the number of particles that would be injected in a specific cell range
+ * 
+ * Although the routine only considers injection in a specific range, the
+ * number of particles to be injected is calculated on all tiles (returning
+ * zero on those, as expected)
+ * 
+ * @param range 
+ * @param np 
+ */
+void Species::np_inject( bnd<unsigned int> range, int * np ) {
+
+    float2 ref = make_float2( moving_window.motion(), 0 );
+
+    density -> np_inject( particles, ppc, dx, ref, range, np );
 }
 
 /**
@@ -366,18 +383,29 @@ void Species::advance( EMF const &emf, Current &current ) {
     iter++;
 
     // Moving window - shift particles
-    //move_window_shift();
+    if ( moving_window.needs_move( iter * dt ) ) {
+                
+        // Shift particles left 1 cell
+        particles -> cell_shift( make_int2(-1,0) );
 
-    // Update tiles
-//    particles -> tile_sort_mk2( *tmp );
+        moving_window.advance();
+        moving_window.needs_inject = true;
 
-    particles -> tile_sort_mk3( *tmp );
+        uint2 g_nx = particles -> g_nx();
 
-//    particles -> tile_sort_mk4( *tmp );
+        bnd<unsigned int> range;
+        range.x = { .lower = g_nx.x - 1, .upper = g_nx.x - 1 };
+        range.y = { .lower = 0, .upper = g_nx.y - 1 };
 
+        np_inject( range, tmp -> tiles.np2 );
+
+    } 
+    
+    particles -> tile_sort( *tmp, moving_window.needs_inject );
 
     // Moving window - inject new particles
-    //move_window_inject();
+    move_window_inject();
+
 }
 
 __device__
@@ -1478,11 +1506,14 @@ void Species::deposit_charge( Field &charge ) const {
 
     size_t shm_size = roundup4( ext_nx.x * ext_nx.y ) * sizeof(float);
 
+    deviceCheck();
+
     _dep_charge_kernel <<< grid, block, shm_size >>> (
         charge.d_buffer, charge.offset(), ext_nx,
         particles -> tiles, particles -> data, q
     );
-
+    
+    deviceCheck();
 }
 
 
@@ -1543,6 +1574,7 @@ void Species::save_charge() const {
     Field charge( particles -> ntiles, particles -> nx, gc );
 
     charge.zero();
+
     deposit_charge( charge );
 
     charge.add_from_gc();

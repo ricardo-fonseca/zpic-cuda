@@ -5,6 +5,56 @@
 
 #include <vector>
 
+
+/**
+ * @brief Tests absorbing boundary conditions for particles
+ * 
+ */
+void test_absorb() {
+    // Create simulation box
+    uint2 ntiles = {16, 16};
+    uint2 nx = {16, 16};
+
+    float2 box = {nx.x * ntiles.x * 0.1f, nx.y * ntiles.y * 0.1f};
+
+    float dt = 0.07;
+
+    Simulation sim(ntiles, nx, box, dt);
+
+    // Add particles species
+    uint2 ppc = {8, 8};
+
+    Species electrons("electrons", -1.0f, ppc);
+    electrons.set_density(Density::Step(coord::x, 1.0, 5.0));
+
+    sim.add_species(electrons);
+    sim.set_moving_window();
+    
+    electrons.save_charge();
+
+    // Run simulation
+    int const imax = 256;
+
+    printf("Running mov.window absorption test up to n = %d...\n", imax);
+
+    Timer timer;
+
+    timer.start();
+
+    while (sim.get_iter() < imax)
+    {
+        sim.advance();
+
+        if ( sim.get_iter() % 16 == 0 ) electrons.save_charge();
+    }
+
+    timer.stop();
+
+    printf("Simulation complete at i = %d\n", sim.get_iter());
+
+    printf("Elapsed time was: %.3f s\n", timer.elapsed(timer::s));
+}
+
 /**
  * @brief Tests EM solver and laser injection
  *
@@ -303,6 +353,8 @@ void test_lwfa()
     Species electrons("electrons", -1.0f, ppc);
     electrons.set_density(Density::Step(coord::x, 1.0, 20.48));
 
+    sim.add_species(electrons);
+
     Laser::Gaussian laser;
     laser.start = 17.0;
     laser.fwhm = 2.0;
@@ -314,12 +366,12 @@ void test_lwfa()
     laser.polarization = M_PI_2;
 
     sim.emf->add_laser(laser);
-    // sim.current -> set_filter( Filter::Compensated() );
+    sim.current -> set_filter( Filter::Compensated( coord::x ) );
 
     sim.set_moving_window();
 
     // Run simulation
-    float const tmax = 22.;
+    float const tmax = 44.;
 
     printf("Running LWFA test up to t = %g...\n", tmax);
 
@@ -329,7 +381,6 @@ void test_lwfa()
 
     while (sim.get_t() < tmax)
     {
-
         sim.advance();
     }
 
@@ -343,7 +394,7 @@ void test_lwfa()
 
     electrons.save_phasespace(
         phasespace::x, make_float2(0., 20.48), 1024,
-        phasespace::ux, make_float2(-2., 2), 512);
+        phasespace::ux, make_float2(-4., 8), 1024);
     electrons.save();
 
     printf("Elapsed time was: %.3f s\n", timer.elapsed(timer::s));
@@ -919,6 +970,7 @@ int main(int argc, char *argv[])
 
     std::vector<Test> tests;
 
+    tests.push_back(Test("absorb", &test_absorb));
     tests.push_back(Test("emf", &test_emf));
     tests.push_back(Test("move_window", &test_move_window));
     tests.push_back(Test("filter", &test_filter));
@@ -933,8 +985,6 @@ int main(int argc, char *argv[])
     tests.push_back(Test("frozen", &test_frozen));
     tests.push_back(Test("warm", &test_warm));
     tests.push_back(Test("benchmark", &benchmark_weibel));
-
-
     
     switch (argc)
     {
@@ -947,6 +997,7 @@ int main(int argc, char *argv[])
             {
                 test.run();
                 found = true;
+                break;
             }
         }
 

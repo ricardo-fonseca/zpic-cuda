@@ -7,6 +7,7 @@
 #include "emf.cuh"
 #include "species.cuh"
 #include "current.cuh"
+#include "filter.cuh"
 #include "cathode.cuh"
 
 #include "simulation.cuh"
