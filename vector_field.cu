@@ -270,6 +270,9 @@ void VectorField::add( const VectorField &rhs )
     _add_kernel <<< grid, block >>> ( d_buffer, rhs.d_buffer, size );
 }
 
+//#define _copy_gcx_kernel _copy_gcx_kernel_mk1
+#define _copy_gcx_kernel _copy_gcx_kernel_mk2
+//#define _copy_gcx_kernel _copy_gcx_kernel_mk3
 
 /**
  * @brief CUDA kernel for updating guard cell values along x direction
@@ -282,7 +285,7 @@ void VectorField::add( const VectorField &rhs )
  * @param gcx1      Number of guard cells at the upper x boundary
  */
 __global__
-void _copy_gcx_kernel( 
+void _copy_gcx_kernel_mk1( 
     float3 * const __restrict__ buffer, 
     int const periodic,
     uint2 const ext_nx, uint2 const int_nx,
@@ -327,6 +330,137 @@ void _copy_gcx_kernel(
     }
 }
 
+__global__
+/**
+ * @brief CUDA kernel for updating guard cell values along x direction
+ * 
+ * This version does all copies using float (not float3) and attempts to
+ * improve coallescence.
+ * 
+ * Improves performance by ~ 8 % (with 128 threads/block)
+ * 
+ * @param buffer    Global data buffer (no offset)
+ * @param periodic  Use periodic boundaries along x direction
+ * @param ext_nx    External tile size
+ * @param int_nx    Internal tile size
+ * @param gcx0      Number of guard cells at the lower x boundary
+ * @param gcx1      Number of guard cells at the upper x boundary
+ */
+void _copy_gcx_kernel_mk2( 
+    float3 * const __restrict__ buffer, 
+    int const periodic,
+    uint2 const ext_nx, uint2 const int_nx,
+    const int gcx0, const int gcx1 )
+{
+    const int y_coord = blockIdx.y;
+    const int x_coord = blockIdx.x;
+    const int tile_vol = roundup4( ext_nx.x * ext_nx.y );
+    float * __restrict__ local   = (float *) ( buffer + (y_coord * gridDim.x + x_coord ) * tile_vol );
+
+    // Find neighbours
+    int x_lcoord = x_coord - 1;
+    int x_ucoord = x_coord + 1;
+
+    if ( periodic ) {
+        if ( x_lcoord < 0 ) x_lcoord += gridDim.x;
+        if ( x_ucoord >= gridDim.x ) x_ucoord -= gridDim.x;
+    }
+
+    // Copy data to lower guard cells
+    if ( x_lcoord >= 0 ) {
+        float * __restrict__ x_lower = (float *)( buffer + (y_coord * gridDim.x + x_lcoord) * tile_vol );
+        // j = [0 .. ext_nx.y[
+        // i = [0 .. gc0[
+        for( int k = threadIdx.x; k < 3 * ext_nx.y * gcx0; k += blockDim.x ) {
+            const int idx = k / 3;
+            const int fc = k % 3;
+
+            const int i = idx % gcx0;
+            const int j = idx / gcx0;
+            
+            local[ fc + 3 * (i + j * ext_nx.x) ] = x_lower[ fc + 3 * ( int_nx.x + i + j * ext_nx.x ) ];
+        }
+    }
+
+    // Copy data to upper guard cells
+    if ( x_ucoord < gridDim.x ) {
+        float * __restrict__ x_upper = (float *) (buffer + (y_coord * gridDim.x + x_ucoord) * tile_vol );
+        // j = [0 .. ext_nx.y[
+        // i = [0 .. gc1[
+        for( int k = threadIdx.x; k < 3 * ext_nx.y * gcx1; k += blockDim.x ) {
+            const int idx = k / 3;
+            const int fc = k % 3;
+
+            const int i = idx % gcx1;
+            const int j = idx / gcx1;
+            local[ fc + 3* (gcx0 + int_nx.x + i + j * ext_nx.x) ] = x_upper[ fc + 3 * (gcx0 + i + j * ext_nx.x) ];
+        }
+    }
+}
+
+__global__
+void _copy_gcx_kernel_mk3( 
+    float3 * const __restrict__ buffer, 
+    int const periodic,
+    uint2 const ext_nx, uint2 const int_nx,
+    const int gcx0, const int gcx1 )
+{
+    const int y_coord = blockIdx.y;
+    const int x_coord = blockIdx.x;
+    const int tile_vol = roundup4( ext_nx.x * ext_nx.y );
+    float * __restrict__ local   = (float *) ( buffer + (y_coord * gridDim.x + x_coord ) * tile_vol );
+
+    const int block3 = ( blockDim.x / 3 ) * 3;
+    const int fc = threadIdx.x % 3;
+
+    // Find neighbours
+    int x_lcoord = x_coord - 1;
+    int x_ucoord = x_coord + 1;
+
+    if ( periodic ) {
+        if ( x_lcoord < 0 ) x_lcoord += gridDim.x;
+        if ( x_ucoord >= gridDim.x ) x_ucoord -= gridDim.x;
+    }
+
+    // Copy data to lower guard cells
+    if ( x_lcoord >= 0 ) {
+        float * __restrict__ x_lower = (float *)( buffer + (y_coord * gridDim.x + x_lcoord) * tile_vol );
+
+        if ( threadIdx.x < block3 ) {
+
+            // j = [0 .. ext_nx.y[
+            // i = [0 .. gc0[
+            for( int idx = threadIdx.x/3; idx < ext_nx.y * gcx0; idx += block3/3 ) {
+                const int i = idx % gcx0;
+                const int j = idx / gcx0;
+                
+                local[ fc + 3 * (i + j * ext_nx.x) ] = x_lower[ fc + 3 * ( int_nx.x + i + j * ext_nx.x ) ];
+            }
+        }
+    }
+
+    // Copy data to upper guard cells
+    if ( x_ucoord < gridDim.x ) {
+        float * __restrict__ x_upper = (float *) (buffer + (y_coord * gridDim.x + x_ucoord) * tile_vol );
+
+        if ( threadIdx.x < block3 ) {
+
+            // j = [0 .. ext_nx.y[
+            // i = [0 .. gc1[
+            for( int idx = threadIdx.x/3; idx < ext_nx.y * gcx1; idx += block3/3 ) {
+                const int i = idx % gcx1;
+                const int j = idx / gcx1;
+                local[ fc + 3* (gcx0 + int_nx.x + i + j * ext_nx.x) ] = x_upper[ fc + 3 * (gcx0 + i + j * ext_nx.x) ];
+            }
+        }
+    }
+}
+
+
+//#define _copy_gcy_kernel _copy_gcy_kernel_mk1
+#define _copy_gcy_kernel _copy_gcy_kernel_mk2
+//#define _copy_gcy_kernel _copy_gcy_kernel_mk3
+
 /**
  * @brief CUDA kernel for updating guard cell values along y direction
  * 
@@ -338,7 +472,7 @@ void _copy_gcx_kernel(
  * @param gcy1      Number of guard cells at the upper y boundary
  */
 __global__
-void _copy_gcy_kernel( 
+void _copy_gcy_kernel_mk1( 
     float3 * const __restrict__ buffer,
     int const periodic,
     uint2 const ext_nx, uint2 const int_nx,
@@ -383,6 +517,135 @@ void _copy_gcy_kernel(
     }
 }
 
+__global__
+/**
+ * @brief CUDA kernel for updating guard cell values along y direction
+ *
+ * This version does all copies using float (not float3) and attempts to
+ * improve coallescence.
+ * 
+ * Improves performance by ~ 20 % (with 128 threads/block)
+ * (there's more opportunity for coallesced access when compared to
+ * copy_gcx)
+ * 
+ * @param buffer    Global data buffer (no offset)
+ * @param periodic  Use periodic boundaries along y direction
+ * @param ext_nx    External tile size
+ * @param int_nx    Internal tile size
+ * @param gcy0      Number of guard cells at the lower y boundary
+ * @param gcy1      Number of guard cells at the upper y boundary
+ */
+void _copy_gcy_kernel_mk2( 
+    float3 * const __restrict__ buffer,
+    int const periodic,
+    uint2 const ext_nx, uint2 const int_nx,
+    int const gcy0, int const gcy1 )
+{
+    const int y_coord = blockIdx.y;
+    const int x_coord = blockIdx.x;
+    const int tile_vol = roundup4( ext_nx.x * ext_nx.y );
+    float * __restrict__ local = (float *) (buffer + (y_coord  * gridDim.x + x_coord ) * tile_vol);
+
+    // Find neighbours
+    int y_lcoord = y_coord - 1;
+    int y_ucoord = y_coord + 1;
+
+    if ( periodic ) {
+        if ( y_lcoord < 0 ) y_lcoord += gridDim.y;
+        if ( y_ucoord >= gridDim.y ) y_ucoord -= gridDim.y;
+    }
+
+    // Copy data to lower guard cells
+    if ( y_lcoord >= 0 ) {
+        float * __restrict__ y_lower = (float *) (buffer + (y_lcoord * gridDim.x + x_coord ) * tile_vol );
+        // j = [0 .. gcy0[
+        // i = [0 .. ext_nx.x[
+        for( int k = threadIdx.x; k < 3 * gcy0 * ext_nx.x; k += blockDim.x ) {
+            const int idx = k / 3;
+            const int fc = k % 3;
+
+            const int j = idx / ext_nx.x;
+            const int i = idx % ext_nx.x;
+
+            local[ fc + 3*(i + j * ext_nx.x) ] = y_lower[ fc + 3*(i + (int_nx.y+j) * ext_nx.x) ];
+        }
+    }
+
+    // Copy data to upper guard cells
+    if ( y_ucoord < gridDim.y ) {
+        float * __restrict__ y_upper = (float *)(buffer + (y_ucoord * gridDim.x + x_coord ) * tile_vol);
+        // j = [0 .. gcy1[
+        // i = [0 .. ext_nx.x[
+        for( int k = threadIdx.x; k < 3 * gcy1 * ext_nx.x; k += blockDim.x ) {
+            const int idx = k / 3;
+            const int fc = k % 3;
+
+            const int j = idx / ext_nx.x;
+            const int i = idx % ext_nx.x;
+
+            local[ fc + 3*(i + ( gcy0 + int_nx.y + j ) * ext_nx.x) ] = y_upper[ fc + 3*(i + ( gcy0 + j ) * ext_nx.x) ];
+        }
+    }
+}
+
+__global__
+void _copy_gcy_kernel_mk3( 
+    float3 * const __restrict__ buffer,
+    int const periodic,
+    uint2 const ext_nx, uint2 const int_nx,
+    int const gcy0, int const gcy1 )
+{
+    const int y_coord = blockIdx.y;
+    const int x_coord = blockIdx.x;
+    const int tile_vol = roundup4( ext_nx.x * ext_nx.y );
+    float * __restrict__ local = (float *) (buffer + (y_coord  * gridDim.x + x_coord ) * tile_vol);
+
+    const int block3 = ( blockDim.x / 3 ) * 3;
+    const int fc = threadIdx.x % 3;
+
+    // Find neighbours
+    int y_lcoord = y_coord - 1;
+    int y_ucoord = y_coord + 1;
+
+    if ( periodic ) {
+        if ( y_lcoord < 0 ) y_lcoord += gridDim.y;
+        if ( y_ucoord >= gridDim.y ) y_ucoord -= gridDim.y;
+    }
+
+    // Copy data to lower guard cells
+    if ( y_lcoord >= 0 ) {
+        float * __restrict__ y_lower = (float *) (buffer + (y_lcoord * gridDim.x + x_coord ) * tile_vol );
+        
+        
+        if ( threadIdx.x < block3 ) {
+            
+            // j = [0 .. gcy0[
+            // i = [0 .. ext_nx.x[
+            for( int idx = threadIdx.x/3; idx < gcy0 * ext_nx.x; idx += block3/3 ) {
+
+                const int j = idx / ext_nx.x;
+                const int i = idx % ext_nx.x;
+
+                local[ fc + 3*(i + j * ext_nx.x) ] = y_lower[ fc + 3*(i + (int_nx.y+j) * ext_nx.x) ];
+            }
+        }
+    }
+
+    // Copy data to upper guard cells
+    if ( y_ucoord < gridDim.y ) {
+        float * __restrict__ y_upper = (float *)(buffer + (y_ucoord * gridDim.x + x_coord ) * tile_vol);
+        // j = [0 .. gcy1[
+        // i = [0 .. ext_nx.x[
+        for( int idx = threadIdx.x/3; idx < gcy1 * ext_nx.x; idx += block3/3 ) {
+
+            const int j = idx / ext_nx.x;
+            const int i = idx % ext_nx.x;
+
+            local[ fc + 3*(i + ( gcy0 + int_nx.y + j ) * ext_nx.x) ] = y_upper[ fc + 3*(i + ( gcy0 + j ) * ext_nx.x) ];
+        }
+    }
+}
+
 /**
  * @brief Copies edge valies to neighboring guard cells
  * 
@@ -392,7 +655,7 @@ void VectorField::copy_to_gc( ) {
 
     uint2 ext = ext_nx();
 
-    dim3 block( 64 );
+    dim3 block( 128 );
     dim3 grid( ntiles.x, ntiles.y );
 
     _copy_gcx_kernel <<< grid, block >>> (
@@ -402,6 +665,7 @@ void VectorField::copy_to_gc( ) {
     _copy_gcy_kernel <<< grid, block >>> (
         d_buffer, periodic.y, ext, nx, gc.y.lower, gc.y.upper
     );
+
 };
 
 
@@ -561,7 +825,7 @@ __global__
  * @param buffer    Global data buffer
  * @param ext_nx    External tile size
  */
-void _x_shift_left_kernel( unsigned int const shift, float3 * const __restrict__ buffer, uint2 const ext_nx )
+void _x_shift_left_kernel_mk1( unsigned int const shift, float3 * const __restrict__ buffer, uint2 const ext_nx )
 {
     extern __shared__ float3 local[];
 
@@ -591,6 +855,140 @@ void _x_shift_left_kernel( unsigned int const shift, float3 * const __restrict__
 
 }
 
+__global__
+/**
+ * @brief CUDA kernel for left shifting grid data - mk2
+ * 
+ * This version copies device data into shared memory using coallesced float4
+ * operations, does the shift in local memory, and then copies back to main
+ * memory using the same strategy
+ * 
+ * @param shift     Number of cells to shift
+ * @param buffer    Global data buffer
+ * @param ext_nx    External tile size
+ */
+void _x_shift_left_kernel_mk2( unsigned int const shift, float3 * const __restrict__ buffer, uint2 const ext_nx )
+{
+    extern __shared__ float3 local[];
+
+    auto block = cg::this_thread_block();
+
+    const int tid      = ( blockIdx.y * gridDim.x + blockIdx.x );
+    const int tile_vol = roundup4( ext_nx.x * ext_nx.y );
+    unsigned int offset = tid * tile_vol;
+
+    float3 * __restrict__ A = (float3 *) & local[0];
+    float3 * __restrict__ B = (float3 *) & local[tile_vol];
+
+    // Copy values from global memory
+    {
+        float4 * __restrict__ dst = (float4 * ) A;
+        float4 * __restrict__ src = (float4 * ) &buffer[ offset ];
+        const int size = (3 * tile_vol) / 4;
+
+        for( int i = threadIdx.x; i < size; i += blockDim.x ) {
+            dst[i] = src[i];
+        }
+    }
+
+    block.sync();
+
+    // j = [0 .. ext_nx.y[
+    // i = [0 .. ext_nx.x[
+    for( int idx = block.thread_rank(); idx < ext_nx.y * ext_nx.x; idx += block.num_threads() ) {
+        const int i = idx % ext_nx.x;
+        const int j = idx / ext_nx.x;
+        if ( i < ext_nx.x - shift ) {
+            B[ i + j * ext_nx.x ] = A[ (i + shift) + j * ext_nx.x ];
+        } else {
+            B[ i + j * ext_nx.x ] = make_float3( 0., 0., 0. );
+        }
+    }
+
+    block.sync();
+
+    // Copy values to global memory
+    {
+        float4 * __restrict__ dst = (float4 * ) &buffer[ offset ];
+        float4 * __restrict__ src = (float4 * ) B;
+        const int size = (3 * tile_vol) / 4;
+
+        for( int i = threadIdx.x; i < size; i += blockDim.x ) {
+            dst[i] = src[i];
+        }
+    }
+
+}
+
+__global__
+/**
+ * @brief CUDA kernel for left shifting grid data - mk3
+ * 
+ * Same as mk2 but avoids float3 altogether
+ * 
+ * @param shift     Number of cells to shift
+ * @param buffer    Global data buffer
+ * @param ext_nx    External tile size
+ */
+void _x_shift_left_kernel_mk3( unsigned int const shift, float3 * const __restrict__ buffer, uint2 const ext_nx )
+{
+    extern __shared__ float3 local[];
+
+    auto block = cg::this_thread_block();
+
+    const int tid      = ( blockIdx.y * gridDim.x + blockIdx.x );
+    const int tile_vol = roundup4( ext_nx.x * ext_nx.y );
+    unsigned int offset = tid * tile_vol;
+
+    // Copy values from global memory
+    {
+        float4 * __restrict__ dst = (float4 * ) & local[0];
+        float4 * __restrict__ src = (float4 * ) & buffer[ offset ];
+        const int size = (3 * tile_vol) / 4;
+
+        for( int i = threadIdx.x; i < size; i += blockDim.x ) {
+            dst[i] = src[i];
+        }
+    }
+
+    block.sync();
+
+    float * __restrict__ A = (float *) & local[0];
+    float * __restrict__ B = (float *) & local[tile_vol];
+
+    // j = [0 .. ext_nx.y[
+    // i = [0 .. ext_nx.x[
+    for( int idx = block.thread_rank(); idx < ext_nx.y * ext_nx.x; idx += block.num_threads() ) {
+        const int i = idx % ext_nx.x;
+        const int j = idx / ext_nx.x;
+
+        const int idxB = 3 * (i + j * ext_nx.x);
+        const int idxA = idxB + 3 * shift;
+        if ( i < ext_nx.x - shift ) {
+            B[ 0 + idxB ] = A[ 0 + idxA ];
+            B[ 1 + idxB ] = A[ 1 + idxA ];
+            B[ 2 + idxB ] = A[ 2 + idxA ];
+        } else {
+            B[ 0 + idxB ] = 0;
+            B[ 1 + idxB ] = 0;
+            B[ 2 + idxB ] = 0;
+        }
+    }
+
+    block.sync();
+
+    // Copy values to global memory
+    {
+        float4 * __restrict__ dst = (float4 * ) & buffer[ offset ];
+        float4 * __restrict__ src = (float4 * ) & local[tile_vol];
+        const int size = (3 * tile_vol) / 4;
+
+        for( int i = threadIdx.x; i < size; i += blockDim.x ) {
+            dst[i] = src[i];
+        }
+    }
+}
+
 __host__
 /**
  * @brief Shift data left by the specified amount injecting zeros
@@ -605,12 +1003,25 @@ void VectorField::x_shift_left( unsigned int const shift ) {
     if ( gc.x.upper >= shift ) {
         uint2 ext = ext_nx();
 
-        dim3 block( 64 );
+        dim3 block( 1024 );
         dim3 grid( ntiles.x, ntiles.y );
 
-        size_t shm_size = ext.x * ext.y * sizeof(float3);
 
-        _x_shift_left_kernel<<< grid, block, shm_size >>> ( shift, d_buffer, ext );
+        const int tile_vol = roundup4( ext.x * ext.y );
+
+/*
+        size_t shm_size = tile_vol * sizeof(float3);
+        _x_shift_left_kernel_mk1<<< grid, block, shm_size >>> ( shift, d_buffer, ext );
+*/
+
+
+        size_t shm_size = 2 * tile_vol * sizeof(float3);
+        _x_shift_left_kernel_mk2<<< grid, block, shm_size >>> ( shift, d_buffer, ext );
+
+/*
+        size_t shm_size = 2 * tile_vol * sizeof(float3);
+        _x_shift_left_kernel_mk3<<< grid, block, shm_size >>> ( shift, d_buffer, ext );
+*/
 
         // Update x guard cells not changing lower and upper global guard cells
         _copy_gcx_kernel <<<grid, block>>> ( d_buffer, 0, ext, nx, gc.x.lower, gc.x.upper );
@@ -625,6 +1036,10 @@ __global__
 /**
  * @brief CUDA kernel for VectorField::kernel3_x
  * 
+ * Original version, keep for reference only
+ * 
+ * Requires shm_size = tile_vol * sizeof(float3);
+ * 
  * @param a         Convolution kernel a value
  * @param b         Convolution kernel b value
  * @param c         Convolution kernel c value
@@ -633,7 +1048,7 @@ __global__
  * @param ext_nx    External tile size
  * @param offset    Offset to position (0,0) on tile
  */
-void _kernel3_x( float const a, float const b, float const c, 
+void _kernel3_x_mk0( float const a, float const b, float const c, 
     float3 * const __restrict__ buffer, 
     uint2 const int_nx, uint2 const ext_nx, unsigned int const offset )
 {
@@ -669,6 +1084,88 @@ void _kernel3_x( float const a, float const b, float const c,
     }
 }
 
+__global__
+/**
+ * @brief CUDA kernel for VectorField::kernel3_x
+ * 
+ * Copies data to shared memory, does convolution in shared
+ * memory and then copies result to global memory
+ * 
+ * Requires shm_size = 2 * tile_vol * sizeof(float3);
+ * 
+ * @param a         Convolution kernel a value
+ * @param b         Convolution kernel b value
+ * @param c         Convolution kernel c value
+ * @param buffer    Data buffer
+ * @param int_nx    Internal tile size
+ * @param ext_nx    External tile size
+ * @param offset    Offset to position (0,0) on tile
+ */
+void _kernel3_x( float const a, float const b, float const c, 
+    float3 * const __restrict__ buffer, 
+    uint2 const int_nx, uint2 const ext_nx, unsigned int const offset )
+{
+
+    auto block = cg::this_thread_block();
+    extern __shared__ float3 local[];
+
+    const int tid      = ( blockIdx.y * gridDim.x + blockIdx.x );
+    const int tile_vol = roundup4( ext_nx.x * ext_nx.y );
+    const int tile_off = tid * tile_vol;
+
+    // Copy values from global memory
+    {
+        float4 * __restrict__ dst = (float4 * ) & local[0];
+        float4 * __restrict__ dst2 = (float4 * ) & local[tile_vol];
+        float4 * __restrict__ src = (float4 * ) & buffer[ tile_off ];
+        const int size = (3 * tile_vol) / 4;
+
+        for( int i = threadIdx.x; i < size; i += blockDim.x ) {
+            float4 v = src[i];
+            dst[i] = v;
+            dst2[i] = v;
+        }
+    }
+
+    block.sync();
+
+    // Do kernel convolution in shared memory
+    {
+        const int stride = ext_nx.x;
+
+        float3 * __restrict__ A = ( & local[0] )        + offset;
+        float3 * __restrict__ B = ( & local[tile_vol])  + offset;
+
+        for( int idx = threadIdx.x; idx < int_nx.x * int_nx.y; idx += blockDim.x ) {
+            const int j = idx / int_nx.x;
+            const int i = idx % int_nx.x;
+
+            // 132.11
+            float3 val;
+
+            val.x = a * A[ j*stride + (i-1) ].x + b * A[ j*stride + i ].x + c * A[ j*stride + (i+1) ].x;
+            val.y = a * A[ j*stride + (i-1) ].y + b * A[ j*stride + i ].y + c * A[ j*stride + (i+1) ].y;
+            val.z = a * A[ j*stride + (i-1) ].z + b * A[ j*stride + i ].z + c * A[ j*stride + (i+1) ].z;
+
+            B[ j*stride + i ] = val;
+        }
+    }
+
+    block.sync();
+
+    // Copy values back to global memory
+    {
+        float4 * __restrict__ dst = (float4 * ) & buffer[ tile_off ];
+        float4 * __restrict__ src = (float4 * ) & local[ tile_vol ];
+        const int size = (3 * tile_vol) / 4;
+
+        for( int i = threadIdx.x; i < size; i += blockDim.x ) {
+            dst[i] = src[i];
+        }
+    }
+
+}
+
 /**
  * @brief Perform a convolution with a 3 point kernel [a,b,c] along x
  * 
@@ -682,14 +1179,15 @@ void VectorField::kernel3_x( float const a, float const b, float const c ) {
 
         uint2 ext = ext_nx();
 
-        dim3 block( 64 );
+        dim3 block( 1024 );
         dim3 grid( ntiles.x, ntiles.y );
+        const int tile_vol = roundup4( ext.x * ext.y );
 
-        size_t shm_size = ext.x * ext.y * sizeof(float3);
+        size_t shm_size = 2 * tile_vol * sizeof(float3);
+        _kernel3_x<<< grid, block, shm_size >>> ( a, b, c, d_buffer, nx, ext, offset() );       
 
-        _kernel3_x<<< grid, block, shm_size >>> ( a, b, c, d_buffer, nx, ext, offset() );
-        
-        _copy_gcx_kernel <<<grid, block>>> ( d_buffer, 0, ext, nx, gc.x.lower, gc.x.upper );
+        // _copy_gcx_kernel is faster with a smaller number of threads per block
+        _copy_gcx_kernel <<<grid, 128>>> ( d_buffer, 0, ext, nx, gc.x.lower, gc.x.upper );
 
     } else {
         std::cerr << "(*error*) VectorField::kernel_x3() requires at least 1 guard cell at both the lower and upper x boundaries.\n";

@@ -340,8 +340,8 @@ void test_lwfa()
 
     // Create simulation box
     uint2 ntiles = {32, 16};
-    uint2 nx = {32, 16};
-    float2 box = {20.48, 25.6};
+    uint2 nx = {64, 16};
+    float2 box = {40.96, 25.6};
 
     float dt = 0.014;
 
@@ -351,17 +351,17 @@ void test_lwfa()
     uint2 ppc = {4, 4};
 
     Species electrons("electrons", -1.0f, ppc);
-    electrons.set_density(Density::Step(coord::x, 1.0, 20.48));
+    electrons.set_density(Density::Step(coord::x, 1.0, 40.96));
 
     sim.add_species(electrons);
 
     Laser::Gaussian laser;
-    laser.start = 17.0;
+    laser.start = 40.8;
     laser.fwhm = 2.0;
-    laser.a0 = 3.0;
+    laser.a0 = 1.0;
     laser.omega0 = 10.0;
     laser.W0 = 4.0;
-    laser.focus = 20.28;
+    laser.focus = 40.96;
     laser.axis = 12.8;
     laser.polarization = M_PI_2;
 
@@ -381,7 +381,7 @@ void test_lwfa()
 
     while (sim.get_t() < tmax)
     {
-        sim.advance();
+        sim.advance_mov_window();
     }
 
     timer.stop();

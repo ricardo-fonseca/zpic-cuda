@@ -4,10 +4,23 @@
 
 * Thermal boundaries for particles
 
+## 2023.04.27
+
+* Improves on moving window implementation, particle shift is now done inside the advance
+  deposit. There is a new method `Species::advance_deposit_mov_window()` that should be
+  done for this purpose.
+* Makes `mk3` particle tile sort the default
+* Improves performance of the `kernel3_x` CUDA kernel code used for current filtering
+* Improves performance of the `copy_gcx` and `copy_gcy` CUDA kernels
+* Species initialization now sets the tile `offset` values according to the number of
+  particles to be injected at t = 0 
+* Increases (longitudinal) size of LWFA test
+* Cosmetic update to LWFA notebook
+
 ## 2023.04.14
 
 * Implements moving window support for low-memory particle sorter
-* Implements `Species::np_inject()` method that gets number of particles to be injected
+* Implements `Species::np_inject()` method that gets the number of particles to be injected
   per tile.
 * Sets the particle buffer size to 1.2 times the grid volume times ppc
 * Fixes issues with the LWFA test

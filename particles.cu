@@ -35,27 +35,31 @@ Particles::Particles(uint2 const ntiles, uint2 const nx, unsigned int const max_
 {    
     size_t size = ntiles.x * ntiles.y * max_np_tile;
 
-    // std::cerr << "(*development*) Particle buffer size = " << size << "\n";
-
     malloc_dev( data.ix, size );
     malloc_dev( data.x, size );
     malloc_dev( data.u, size );
 
     malloc_dev( idx, size );
 
-    // Allocate tile information array on device and initialize using a CUDA kernel
+    // Allocate tile information array on device
 
-    malloc_dev( tiles.offset, ntiles.x * ntiles.y );
-    malloc_dev( tiles.offset2, ntiles.x * ntiles.y );
     malloc_dev( tiles.np, ntiles.x * ntiles.y );
+    malloc_dev( tiles.offset, ntiles.x * ntiles.y );
+
     malloc_dev( tiles.np2, ntiles.x * ntiles.y );
+    malloc_dev( tiles.offset2, ntiles.x * ntiles.y );
 
     malloc_dev( tiles.nidx, ntiles.x * ntiles.y );
 
     malloc_dev( tiles.npt, 9 * ntiles.x * ntiles.y );
 
-    dim3 grid( ntiles.x, ntiles.y );
-    _init_tiles_kernel <<< grid, 1 >>> ( tiles, max_np_tile );
+    // The buffer is initially empty
+    device::zero( tiles.np, ntiles.x * ntiles.y );
+    device::zero( tiles.offset, ntiles.x * ntiles.y );
+
+//    device::zero( tiles.offset2, ntiles.x * ntiles.y );
+//    device::zero( tiles.np2, ntiles.x * ntiles.y );
+
 };
 
 
@@ -1218,6 +1222,49 @@ void Particles::tile_sort( Particles &tmp, bool offset_np2 ) {
     // For debug only, remove from production code
     // validate( "After tile_sort_mk3");
 
+}
+
+__host__
+/**
+ * @brief in-place low memory tile sort (default)
+ * 
+ * @param tmp           Temporary staging area for particles moving across tiles
+ * @param offset_np2    Include np2 values in offset calculations
+ */
+void Particles::tile_sort( Particles &tmp ) {
+    dim3 grid( ntiles.x, ntiles.y );
+    dim3 block( 1024 );
+
+    int2 lim;
+    lim.x = nx.x;
+    lim.y = nx.y;
+
+    device::zero( tmp.tiles.np, ntiles.x * ntiles.y );
+
+    // Get new number of particles per tile
+    _mk3_bnd_check<<< grid, block >>> ( 
+        lim, tiles, data, tmp.tiles, idx, periodic
+    );
+
+    // Get new offsets (prefix scan of np)
+    _mk3_update_offset<<< 1, 1024 >>> (
+            tmp.tiles, ntiles.x * ntiles.y
+        );
+
+    // Copy outgoing particles (and particles needing shifting) to staging area
+    _mk3_copy_out <<< grid, block >>> ( 
+        lim, tiles, data, idx,
+        tmp.tiles, tmp.data, periodic
+    );
+
+    // Copy particles from staging area into final positions in partile buffer
+    _mk3_copy_in <<< grid, block >>> ( 
+        tiles, data,
+        tmp.tiles, tmp.data
+    );
+
+    // For debug only, remove from production code
+    // validate( "After tile_sort_mk3");
 }
 
 __global__

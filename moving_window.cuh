@@ -10,9 +10,7 @@ class MovingWindow {
 
     public:
 
-    bool needs_inject;
-
-    MovingWindow() : active_(false), n_move_(0), needs_inject(false), dx_(0) {};
+    MovingWindow() : active_(false), n_move_(0), dx_(0) {};
 
     /**
      * @brief Turns moving window on
@@ -21,7 +19,6 @@ class MovingWindow {
     void init( float const dx ) {
         active_ = true;
         n_move_ = 0;
-        needs_inject = false;
         dx_ = dx;
     }
 

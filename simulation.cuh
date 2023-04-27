@@ -108,9 +108,28 @@ class Simulation {
         // Zero global current
         current -> zero();
 
-        // Advance aoo species
+        // Advance all species
         for (int i = 0; i < species.size(); i++) {
             species[i] -> advance( *emf, *current );
+        }
+
+        // Update current edge values and guard cells
+        current -> advance();
+        
+        // Advance EM fields
+        emf -> advance( *current );
+
+        iter++;
+    }
+
+    void advance_mov_window() {
+
+        // Zero global current
+        current -> zero();
+
+        // Advance all species
+        for (int i = 0; i < species.size(); i++) {
+            species[i] -> advance_mov_window( *emf, *current );
         }
 
         // Update current edge values and guard cells

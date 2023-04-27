@@ -360,6 +360,14 @@ public:
 
     __host__
     /**
+     * @brief Move particles (advance positions), deposit current and shift positions
+     * 
+     * @param current   Electric current density
+     */
+    void move( VectorField * const current, int2 const shift );
+
+    __host__
+    /**
      * @brief Move particles (advance positions) without depositing current
      * 
      */
@@ -373,6 +381,15 @@ public:
      * @param current   Electric current density
      */
     virtual void advance( EMF const &emf, Current &current );
+
+    __host__
+    /**
+     * @brief Advance particles 1 timestep and update moving window
+     * 
+     * @param emf       EM fields
+     * @param current   Electric current density
+     */
+    virtual void advance_mov_window( EMF const &emf, Current &current );
 
     __host__
     /**

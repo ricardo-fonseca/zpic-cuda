@@ -111,6 +111,20 @@ class Particles {
     __host__
     auto g_nx() { return make_uint2 ( ntiles.x * nx.x, ntiles.y * nx.y ); };
 
+    /**
+     * @brief Returns global grid range
+     * 
+     * @return bnd<unsigned int> 
+     */
+    __host__
+    auto g_range() { 
+        bnd<unsigned int> range;
+        range.x = { .lower = 0, .upper = ntiles.x * nx.x - 1 };
+        range.y = { .lower = 0, .upper = ntiles.y * nx.y - 1 };
+
+        return range;
+    };
+
     __host__
     /**
      * @brief Gets total number of particles on device
@@ -172,6 +186,9 @@ class Particles {
 
     // in-place low memory tile sort
     void tile_sort( Particles &tmp, bool offset_np2 );
+
+    // in-place low memory tile sort
+    void tile_sort( Particles &tmp );
 
     // out of place tile sort (used when growing buffer)
     void tile_sort_mk2( Particles &tmp );
