@@ -3,6 +3,16 @@
 ## TO-DO
 
 * Thermal boundaries for particles
+* Absorbing boundaries for fields
+
+## 2023.07.24
+
+* Modifies particle injection strategy to minimize memory collisions in electric current
+  deposit. Consecutive particles in the particle buffer are now injected in different
+  cells.
+* Adds performance / energy information to some tests
+* Adds `Species::np()` method to get number of particles directly from species object
+* Updates kernel filtering to process periodic boundaries correctly
 
 ## 2023.04.27
 

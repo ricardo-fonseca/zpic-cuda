@@ -398,6 +398,7 @@ void test_lwfa()
     electrons.save();
 
     printf("Elapsed time was: %.3f s\n", timer.elapsed(timer::s));
+    std::cout << "Performance: " << sim.get_nmove() / timer.elapsed(timer::s) / 1.e9 << " GPart/s\n";
 }
 
 void diag_mushroom(Simulation &sim)
@@ -487,6 +488,8 @@ void test_mushroom()
 
     printf("Simulation complete at t = %g\n", sim.get_t());
 
+    sim.energy_info();
+
     printf("Elapsed time was: %.3f s\n", timer.elapsed(timer::s));
     std::cout << "Performance: " << sim.get_nmove() / timer.elapsed(timer::s) / 1.e9 << " GPart/s\n";
 }
@@ -533,6 +536,10 @@ void test_kh()
     UDistribution::ThermalCorr udist_e(uth_e, ufl, 16);
     UDistribution::ThermalCorr udist_i(uth_i, ufl, 16);
 
+//    UDistribution::Thermal udist_e( uth_e, ufl );
+//    UDistribution::Thermal udist_i( uth_i, ufl );
+
+
     Species e_right("electrons-r", -1.0f, ppc);
     e_right.set_density(Density::Slab(coord::y, 1.0, 0, box.y / 2));
     e_right.set_udist(udist_e);
@@ -547,12 +554,12 @@ void test_kh()
     udist_i.ufl.x = -udist_i.ufl.x;
 
     Species e_left("electrons-l", -1.0f, ppc);
-    e_left.set_density(Density::Slab(coord::y, 1.0, 0, box.y / 2));
+    e_left.set_density(Density::Slab(coord::y, 1.0, box.y / 2, box.y));
     e_left.set_udist(udist_e);
     sim.add_species(e_left);
 
     Species i_left("ions-l", +100.0f, ppc);
-    i_left.set_density(Density::Slab(coord::y, 1.0, 0, box.y / 2));
+    i_left.set_density(Density::Slab(coord::y, 1.0, box.y / 2, box.y));
     i_left.set_udist(udist_i);
     sim.add_species(i_left);
 
@@ -579,6 +586,8 @@ void test_kh()
     timer.stop();
 
     printf("Simulation complete at t = %g\n", sim.get_t());
+
+    sim.energy_info();
 
     printf("Elapsed time was: %.3f s\n", timer.elapsed(timer::s));
     std::cout << "Performance: " << sim.get_nmove() / timer.elapsed(timer::s) / 1.e9 << " GPart/s\n";

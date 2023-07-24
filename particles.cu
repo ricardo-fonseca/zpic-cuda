@@ -910,6 +910,8 @@ void _mk3_update_offset_np2( t_part_tiles const tiles, const unsigned int ntiles
         block.sync();
     }
 
+    // Store total number of particles
+    // if ( block.thread_rank() == 0 ) *reduction = prev;
 }
 
 

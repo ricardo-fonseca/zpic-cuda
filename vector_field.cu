@@ -1036,58 +1036,6 @@ __global__
 /**
  * @brief CUDA kernel for VectorField::kernel3_x
  * 
- * Original version, keep for reference only
- * 
- * Requires shm_size = tile_vol * sizeof(float3);
- * 
- * @param a         Convolution kernel a value
- * @param b         Convolution kernel b value
- * @param c         Convolution kernel c value
- * @param buffer    Data buffer
- * @param int_nx    Internal tile size
- * @param ext_nx    External tile size
- * @param offset    Offset to position (0,0) on tile
- */
-void _kernel3_x_mk0( float const a, float const b, float const c, 
-    float3 * const __restrict__ buffer, 
-    uint2 const int_nx, uint2 const ext_nx, unsigned int const offset )
-{
-
-    auto block = cg::this_thread_block();
-    extern __shared__ float3 local[];
-
-    const int tid      = ( blockIdx.y * gridDim.x + blockIdx.x );
-    const int tile_vol = roundup4( ext_nx.x * ext_nx.y );
-    const int tile_off = tid * tile_vol;
-
-    // Copy data into shared memory
-    for( int i = block.thread_rank(); i < ext_nx.x * ext_nx.y; i += block.num_threads() ) 
-        local[i] = buffer[ tile_off + i ];
-
-    block.sync();
-
-    // Do kernel convolution and store back to device memory
-    const int stride = ext_nx.x;
-    float3 * __restrict__ tmp = local + offset;
-
-    for( int idx = block.thread_rank(); idx < int_nx.x * int_nx.y; idx += block.num_threads() ) {
-        const int i = idx % int_nx.x;
-        const int j = idx / int_nx.x;
-
-        float3 val;
-
-        val.x = a * tmp[ j*stride + (i-1) ].x + b * tmp[ j*stride + i ].x + c * tmp[ j*stride + (i+1) ].x;
-        val.y = a * tmp[ j*stride + (i-1) ].y + b * tmp[ j*stride + i ].y + c * tmp[ j*stride + (i+1) ].y;
-        val.z = a * tmp[ j*stride + (i-1) ].z + b * tmp[ j*stride + i ].z + c * tmp[ j*stride + (i+1) ].z;
-
-        buffer[ tile_off + offset + j*stride + i ] = val;
-    }
-}
-
-__global__
-/**
- * @brief CUDA kernel for VectorField::kernel3_x
- * 
  * Copies data to shared memory, does convolution in shared
  * memory and then copies result to global memory
  * 
@@ -1099,11 +1047,11 @@ __global__
  * @param buffer    Data buffer
  * @param int_nx    Internal tile size
  * @param ext_nx    External tile size
- * @param offset    Offset to position (0,0) on tile
+ * @param gcx0      Number of lower x guard cells
  */
 void _kernel3_x( float const a, float const b, float const c, 
     float3 * const __restrict__ buffer, 
-    uint2 const int_nx, uint2 const ext_nx, unsigned int const offset )
+    uint2 const int_nx, uint2 const ext_nx, unsigned int const gcx0 )
 {
 
     auto block = cg::this_thread_block();
@@ -1116,14 +1064,12 @@ void _kernel3_x( float const a, float const b, float const c,
     // Copy values from global memory
     {
         float4 * __restrict__ dst = (float4 * ) & local[0];
-        float4 * __restrict__ dst2 = (float4 * ) & local[tile_vol];
         float4 * __restrict__ src = (float4 * ) & buffer[ tile_off ];
         const int size = (3 * tile_vol) / 4;
 
         for( int i = threadIdx.x; i < size; i += blockDim.x ) {
             float4 v = src[i];
             dst[i] = v;
-            dst2[i] = v;
         }
     }
 
@@ -1133,14 +1079,14 @@ void _kernel3_x( float const a, float const b, float const c,
     {
         const int stride = ext_nx.x;
 
-        float3 * __restrict__ A = ( & local[0] )        + offset;
-        float3 * __restrict__ B = ( & local[tile_vol])  + offset;
+        float3 * __restrict__ A = & local[0];
+        float3 * __restrict__ B = & local[tile_vol];
 
-        for( int idx = threadIdx.x; idx < int_nx.x * int_nx.y; idx += blockDim.x ) {
+        // The convolution is also applied in the y guard cells
+        for( int idx = threadIdx.x; idx < int_nx.x * ext_nx.y; idx += blockDim.x ) {
             const int j = idx / int_nx.x;
-            const int i = idx % int_nx.x;
+            const int i = idx % int_nx.x + gcx0;
 
-            // 132.11
             float3 val;
 
             val.x = a * A[ j*stride + (i-1) ].x + b * A[ j*stride + i ].x + c * A[ j*stride + (i+1) ].x;
@@ -1184,10 +1130,11 @@ void VectorField::kernel3_x( float const a, float const b, float const c ) {
         const int tile_vol = roundup4( ext.x * ext.y );
 
         size_t shm_size = 2 * tile_vol * sizeof(float3);
-        _kernel3_x<<< grid, block, shm_size >>> ( a, b, c, d_buffer, nx, ext, offset() );       
+        _kernel3_x<<< grid, block, shm_size >>> ( a, b, c, d_buffer, nx, ext, gc.x.lower );       
+
 
         // _copy_gcx_kernel is faster with a smaller number of threads per block
-        _copy_gcx_kernel <<<grid, 128>>> ( d_buffer, 0, ext, nx, gc.x.lower, gc.x.upper );
+        _copy_gcx_kernel <<<grid, 128>>> ( d_buffer, periodic.x, ext, nx, gc.x.lower, gc.x.upper );
 
     } else {
         std::cerr << "(*error*) VectorField::kernel_x3() requires at least 1 guard cell at both the lower and upper x boundaries.\n";
@@ -1198,7 +1145,12 @@ void VectorField::kernel3_x( float const a, float const b, float const c ) {
 
 __global__
 /**
- * @brief CUDA kernel for VectorField::kernel3_x
+ * @brief CUDA kernel for VectorField::kernel3_y
+ * 
+ * Copies data to shared memory, does convolution in shared
+ * memory and then copies result to global memory
+ * 
+ * Requires shm_size = 2 * tile_vol * sizeof(float3);
  * 
  * @param a         Convolution kernel a value
  * @param b         Convolution kernel b value
@@ -1206,11 +1158,11 @@ __global__
  * @param buffer    Data buffer
  * @param int_nx    Internal tile size
  * @param ext_nx    External tile size
- * @param offset    Offset to position (0,0) on tile
+ * @param gcy0      Number of lower y guard cells
  */
 void _kernel3_y( float const a, float const b, float const c, 
     float3 * const __restrict__ buffer, 
-    uint2 const int_nx, uint2 const ext_nx, unsigned int const offset )
+    uint2 const int_nx, uint2 const ext_nx, unsigned int const gcy0 )
 {
 
     auto block = cg::this_thread_block();
@@ -1220,27 +1172,52 @@ void _kernel3_y( float const a, float const b, float const c,
     const int tile_vol = roundup4( ext_nx.x * ext_nx.y );
     const int tile_off = tid * tile_vol;
 
-    // Copy data into shared memory
-    for( int i = block.thread_rank(); i < ext_nx.x * ext_nx.y; i += block.num_threads() ) 
-        local[i] = buffer[ tile_off + i ];
+    // Copy values from global memory
+    {
+        float4 * __restrict__ dst = (float4 * ) & local[0];
+        float4 * __restrict__ src = (float4 * ) & buffer[ tile_off ];
+        const int size = (3 * tile_vol) / 4;
+
+        for( int i = threadIdx.x; i < size; i += blockDim.x ) {
+            float4 v = src[i];
+            dst[i] = v;
+        }
+    }
 
     block.sync();
 
-    // Do kernel convolution and store back to device memory
-    const int stride = ext_nx.x;
-    float3 * __restrict__ tmp = local + offset;
+    // Do kernel convolution in shared memory
+    {
+        const int stride = ext_nx.x;
 
-    for( int idx = block.thread_rank(); idx < int_nx.x * int_nx.y; idx += block.num_threads() ) {
-        const int i = idx % int_nx.x;
-        const int j = idx / int_nx.x;
+        float3 * __restrict__ A = & local[0];
+        float3 * __restrict__ B = & local[tile_vol];
 
-        float3 val;
+        for( int idx = threadIdx.x; idx < ext_nx.x * int_nx.y; idx += blockDim.x ) {
+            const int j = idx / ext_nx.x + gcy0;
+            const int i = idx % ext_nx.x;
 
-        val.x = a * tmp[ (j-1)*stride + i ].x + b * tmp[ j*stride + i ].x + c * tmp[ (j+1)*stride + i ].x;
-        val.y = a * tmp[ (j-1)*stride + i ].y + b * tmp[ j*stride + i ].y + c * tmp[ (j+1)*stride + i ].y;
-        val.z = a * tmp[ (j-1)*stride + i ].z + b * tmp[ j*stride + i ].z + c * tmp[ (j+1)*stride + i ].z;
+            float3 val;
 
-        buffer[ tile_off + offset + j*stride + i ] = val;
+            val.x = a * A[ (j-1)*stride + i ].x + b * A[ j*stride + i ].x + c * A[ (j+1)*stride + i ].x;
+            val.y = a * A[ (j-1)*stride + i ].y + b * A[ j*stride + i ].y + c * A[ (j+1)*stride + i ].y;
+            val.z = a * A[ (j-1)*stride + i ].z + b * A[ j*stride + i ].z + c * A[ (j+1)*stride + i ].z;
+
+            B[ j*stride + i ] = val;
+        }
+    }
+
+    block.sync();
+
+    // Copy values back to global memory
+    {
+        float4 * __restrict__ dst = (float4 * ) & buffer[ tile_off ];
+        float4 * __restrict__ src = (float4 * ) & local[ tile_vol ];
+        const int size = (3 * tile_vol) / 4;
+
+        for( int i = threadIdx.x; i < size; i += blockDim.x ) {
+            dst[i] = src[i];
+        }
     }
 }
 
@@ -1257,14 +1234,14 @@ void VectorField::kernel3_y( float const a, float const b, float const c ) {
 
         uint2 ext = ext_nx();
 
-        dim3 block( 64 );
+        dim3 block( 1024 );
         dim3 grid( ntiles.x, ntiles.y );
+        const int tile_vol = roundup4( ext.x * ext.y );
 
-        size_t shm_size = ext.x * ext.y * sizeof(float3);
+        size_t shm_size = 2 * tile_vol * sizeof(float3);
+        _kernel3_y<<< grid, block, shm_size >>> ( a, b, c, d_buffer, nx, ext, gc.y.lower );
 
-        _kernel3_y<<< grid, block, shm_size >>> ( a, b, c, d_buffer, nx, ext, offset() );
-        
-        _copy_gcy_kernel <<<grid, block>>> ( d_buffer, 0, ext, nx, gc.y.lower, gc.y.upper );
+        _copy_gcy_kernel <<<grid, 128>>> ( d_buffer, periodic.y, ext, nx, gc.y.lower, gc.y.upper );
 
     } else {
         std::cerr << "(*error*) VectorField::kernel3_y() requires at least 1 guard cell at both the lower and upper y boundaries.\n";

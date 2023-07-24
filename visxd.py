@@ -60,7 +60,7 @@ def grid1d( filename : str, xlim = None, grid : bool = None, scale = None ):
     plt.show()
 
 def grid2d( filename : str, xlim = None, ylim = None, grid = False, cmap = None, norm = None,
-    vsim = False, vmin = None, vmax = None, scale = None ):
+    vsim = False, vmin = None, vmax = None, scale = None, shift = None ):
     """Generates a colormap plot from a 2D grid zdf file
 
     Args:
@@ -105,6 +105,9 @@ def grid2d( filename : str, xlim = None, ylim = None, grid = False, cmap = None,
     # Linearly scale data if requested
     if ( scale ):
         data = data * scale[0] + scale[1]
+    
+    if ( shift ):
+        data = np.roll( data, shift, axis=(1,0) )
 
     if ( vsim ):
         amax = np.amax( np.abs(data) )
@@ -143,7 +146,7 @@ def grid2d( filename : str, xlim = None, ylim = None, grid = False, cmap = None,
     plt.show()
 
 def grid( filename : str, xlim = None, ylim = None, grid : bool = False, cmap = None, norm = None,
-    vsim = False, vmin = None, vmax = None, scale = None ):
+    vsim = False, vmin = None, vmax = None, scale = None, shift = None ):
     """Generates a plot from 1D or 2D grids.
 
     This works as driver for grid1d and grid2d routines.
@@ -168,12 +171,13 @@ def grid( filename : str, xlim = None, ylim = None, grid : bool = False, cmap = 
         grid1d( filename, xlim = xlim, grid = grid, scale = scale )
     elif ( info.grid.ndims == 2 ):
         grid2d( filename, xlim = xlim, ylim = ylim, grid = grid, cmap = cmap, norm = norm,
-            vsim = vsim, vmin = vmin, vmax = vmax, scale = scale )
+            vsim = vsim, vmin = vmin, vmax = vmax, scale = scale, shift = shift )
     else:
         print("(*error*) file {} - unsupported grid dimensions ({}).".format(filename, info.grid.ndims))
 
 
-def vfield2d( filex, filey, xlim = None, ylim = None, grid = False, cmap = None, vmin = 0, vmax = None, title = None ):
+def vfield2d( filex, filey, xlim = None, ylim = None, grid = False, cmap = None,
+              vmin = 0, vmax = None, title = None, shift = None ):
     """Generates a colormap plot 
 
     Args:
@@ -253,6 +257,9 @@ def vfield2d( filex, filey, xlim = None, ylim = None, grid = False, cmap = None,
     ]
 
     data = np.sqrt( np.square( datax ) + np.square( datay ) )
+
+    if ( shift ):
+        data = np.roll( data, shift, axis=(1,0) )
 
     plt.imshow( data, interpolation = 'nearest', origin = 'lower',
             extent = ( range[0][0], range[0][1], range[1][0], range[1][1] ),
@@ -500,18 +507,18 @@ def grid2d_fft( filename : str, xlim = None, ylim = None, grid = False, cmap = N
     plt.show()
 
 def plot_data( fld, iter, xlim = None, ylim = None, cmap = None, norm = None,
-    vsim = None, vmin = None, vmax = None, scale = None ):
+    vsim = None, vmin = None, vmax = None, scale = None, shift = None ):
     
     file = "{}-{:06d}.zdf".format(fld, iter)
 
     if ( os.path.exists(file) ):
         print("Plotting {}".format(file))
         grid( file, xlim = xlim, ylim = ylim, grid = False, cmap = cmap, norm = norm,
-            vsim = vsim, vmin = vmin, vmax = vmax, scale = scale )
+            vsim = vsim, vmin = vmin, vmax = vmax, scale = scale, shift = shift )
     else:
         print("(*error*) file {} not found.".format(file), file = sys.stderr )
 
-def plot_vfield2d( fld, iter, xlim = None, ylim = None, grid = False, norm = None, cmap = None ):
+def plot_vfield2d( fld, iter, xlim = None, ylim = None, grid = False, norm = None, cmap = None, shift = None ):
     print("Plotting {} in plane field for iteration {}.".format(fld,iter))
     
     filex = "{}x-{:06d}.zdf".format(fld, iter)
@@ -520,7 +527,7 @@ def plot_vfield2d( fld, iter, xlim = None, ylim = None, grid = False, norm = Non
     if ( not cmap ):
         cmap = 'YlOrBr'
     vfield2d( filex, filey, xlim = xlim, ylim = ylim, grid = grid, cmap = cmap,
-        title = "In-plane {} field".format(fld) )
+        title = "In-plane {} field".format(fld), shift = shift )
     
     filez = "{}z-{:06d}.zdf".format(fld, iter)
 
@@ -528,4 +535,4 @@ def plot_vfield2d( fld, iter, xlim = None, ylim = None, grid = False, norm = Non
         if ( not norm ):
             norm = colors.CenteredNorm()
         print("Plotting {} out of plane field for iteration {}.".format(fld,iter))
-        grid2d(filez, xlim = xlim, ylim = ylim, grid = grid, cmap = 'BrBG', norm = norm )
+        grid2d(filez, xlim = xlim, ylim = ylim, grid = grid, cmap = 'BrBG', norm = norm, shift = shift )

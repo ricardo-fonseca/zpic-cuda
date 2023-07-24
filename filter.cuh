@@ -36,11 +36,11 @@ class Binomial : public Digital {
         switch( dir ) {
         case( coord::x ):
             for( int i = 0; i < order; i++ )
-                fld.kernel3_x( 0.25f, 0.5f, 0.25f);
+                fld.kernel3_x( 0.25f, 0.5f, 0.25f );
             break;
         case( coord::y ):
             for( int i = 0; i < order; i++ )
-                fld.kernel3_y( 0.25f, 0.5f, 0.25f);
+                fld.kernel3_y( 0.25f, 0.5f, 0.25f );
             break;
         }
     }
@@ -64,12 +64,12 @@ class Compensated : public Binomial{
         switch( dir ) {
         case( coord::x ):
             for( int i = 0; i < order; i++ )
-                fld.kernel3_x( 0.25f, 0.5f, 0.25f);
-            fld.kernel3_x( a/norm, b/norm, a/norm);
+                fld.kernel3_x( 0.25f, 0.5f, 0.25f );
+            fld.kernel3_x( a/norm, b/norm, a/norm );
             break;
         case( coord::y ):
             for( int i = 0; i < order; i++ )
-                fld.kernel3_y( 0.25f, 0.5f, 0.25f);
+                fld.kernel3_y( 0.25f, 0.5f, 0.25f );
             fld.kernel3_y( a/norm, b/norm, a/norm );
             break;
         }

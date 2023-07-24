@@ -441,6 +441,16 @@ public:
 
     __host__
     /**
+     * @brief Returns the total number of particles
+     * 
+     * @return auto 
+     */
+    auto np() const {
+        return particles -> np();
+    }
+
+    __host__
+    /**
      * @brief Save particle data to file
      * 
      * Saves positions and velocities for all particles. Positions are currently
